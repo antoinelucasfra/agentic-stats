@@ -1,0 +1,9 @@
+services:
+  api:
+    build: .
+    image: agentic-stats:latest
+    ports:
+      - "8000:8000"
+    environment:
+      # Override to analyse another CSV with the same columns.
+      AGENTIC_STATS_DATA: /app/data/doe_experiment.csv
