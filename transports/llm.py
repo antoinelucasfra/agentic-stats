@@ -40,13 +40,13 @@ PRESETS: tuple[Preset, ...] = (
     Preset(
         "demo",
         "Demo (no key needed)",
-        "llama-3.1-8b-instant",
+        "openai/gpt-oss-20b",
         GROQ_BASE_URL,
         "server",
     ),
     Preset("ollama-qwen", "Ollama: qwen2.5:7b", "qwen2.5:7b", DEFAULT_BASE_URL, "none"),
     Preset("ollama-llama", "Ollama: llama3.1:8b", "llama3.1:8b", DEFAULT_BASE_URL, "none"),
-    Preset("groq", "Groq (your key)", "llama-3.1-8b-instant", GROQ_BASE_URL, "own"),
+    Preset("groq", "Groq (your key)", "openai/gpt-oss-20b", GROQ_BASE_URL, "own"),
     Preset("openai", "OpenAI (your key)", "gpt-4o-mini", OPENAI_BASE_URL, "own"),
     Preset("custom", "Custom endpoint", "", "", "own"),
 )

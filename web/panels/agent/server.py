@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import traceback
 from typing import Any
 
 from shiny import Inputs, Outputs, Session, module, reactive, ui
@@ -42,6 +43,7 @@ def agent_server(input: Inputs, output: Outputs, session: Session) -> None:
             response = await client().stream_async(user_input, content="all")
             await chat.append_message_stream(response)
         except Exception as exc:
+            traceback.print_exc()
             ui.notification_show(f"The model endpoint failed: {exc}", type="error")
             await chat.append_message(f"The model endpoint failed: `{exc}`")
             return

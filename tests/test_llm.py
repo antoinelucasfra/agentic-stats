@@ -62,7 +62,7 @@ def test_resolve_demo_uses_the_server_key(monkeypatch):
     monkeypatch.setenv("AGENTIC_STATS_LLM_API_KEY", "server-key")
 
     assert llm.resolve("demo", "", "", "") == (
-        "llama-3.1-8b-instant",
+        "openai/gpt-oss-20b",
         llm.GROQ_BASE_URL,
         "server-key",
     )
