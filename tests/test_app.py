@@ -22,7 +22,9 @@ CARD_MARKERS = {
 
 @pytest.fixture
 def ts():
-    with test_server(app) as server:
+    # Rendering the six Overview cards draws several plotnine figures; 30s leaves
+    # room for a loaded machine where the 5s default times out.
+    with test_server(app, timeout_secs=30) as server:
         yield server
 
 

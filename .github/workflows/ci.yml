@@ -26,9 +26,11 @@ jobs:
       # Connect Cloud installs Python packages from requirements.txt, not from
       # uv.lock, so the two files must not drift. Frozen: a stale lock fails here
       # rather than being silently re-resolved.
-      - run: uv export --frozen --no-dev --format requirements-txt --no-hashes --no-header --extra app | diff - requirements.txt
+      # uv exports the project as `-e .`; the deploy installs it non-editable.
+      - run: uv export --frozen --no-dev --format requirements-txt --no-hashes --no-header --extra app | sed 's|^-e \.$|.|' | diff - requirements.txt
       # The deploy path: Connect Cloud pip-installs this exact file on Linux,
-      # which the uv sync above does not exercise.
+      # which the uv sync above does not exercise. The package now comes from a
+      # built wheel, so this also proves the bundled dataset is found.
       - run: |
           uv venv /tmp/cc
           uv pip install --python /tmp/cc/bin/python -r requirements.txt

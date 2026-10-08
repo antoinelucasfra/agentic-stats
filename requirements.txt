@@ -1,4 +1,4 @@
--e .
+.
 annotated-types==0.8.0
     # via pydantic
 anyio==4.15.1

@@ -74,7 +74,9 @@ reads the error and retries with corrected arguments. One behaviour, three trans
 `data/doe_experiment.csv` is generated, not collected: 12 pilot batches x 3 formulations
 x 4 dose levels x 3 operators x 4 replicates = **1728 rows** of continuous `assay_signal`,
 with a real batch random effect (SD 2.0) on top of residual noise (SD 1.5). Tests assert
-the model recovers that structure, so the demo cannot silently rot.
+the model recovers that structure, so the demo cannot silently rot. The build copies it
+into the package, so an installed app carries its dataset instead of reading the
+checkout.
 
 Sanity numbers, so you can check the demo against something:
 
@@ -153,11 +155,10 @@ uv export --no-dev --format requirements-txt --no-hashes --no-header --extra app
 `--no-dev` keeps the dev group out, so Connect Cloud does not install pytest and ruff.
 
 CI regenerates it and diffs it against the committed copy, so a dependency change that
-was not exported fails the build. The first line is `-e .`, which installs this package
-from the repository and is what makes the `src/` layout importable in Connect Cloud's
-environment. That line has to stay editable: the dataset is read from `data/` relative
-to the checkout, and a non-editable install of the same file fails at import with
-`ToolError: Dataset not found at .../site-packages/data/doe_experiment.csv`.
+was not exported fails the build. The first line is `.`: the project installed
+non-editable, because Connect Cloud builds a wheel from the checkout. `uv export` writes
+`-e .` (the editable install a dev environment uses), so CI substitutes it before the
+diff, and the wheel carries `agentic_stats/data/doe_experiment.csv` for the app to read.
 
 To deploy: **Publish** in Connect Cloud, framework **Shiny for Python**, the repository
 and branch, primary file **app.py**, Python **3.12**. Add the Agent tab's endpoint as
@@ -170,9 +171,8 @@ secret variables rather than in the repo:
 | `AGENTIC_STATS_LLM_API_KEY` | the key |
 
 Republish on push is on by default, which replaces the GitHub Pages job that used to
-deploy this. Check two things on the first deploy: that Connect Cloud accepts the
-editable `-e .` line, and that Overview and Playground answer without an endpoint
-configured, since only the Agent tab needs one.
+deploy this. On the first deploy, check that Overview and Playground answer without an
+endpoint configured, since only the Agent tab needs one.
 
 Usage is metered while the app is active, roughly 11 hours a month at 1 CPU and 4 GB
 from the 20 free credits. Free content is public, so a reader either uses the key you
