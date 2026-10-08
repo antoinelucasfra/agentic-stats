@@ -94,20 +94,14 @@ because the batch effect is missing, and adding the random intercept fixes it.
 ```bash
 uv sync --all-extras --all-groups      # Python 3.12+, deps resolved and locked
 uv run python -m agentic_stats.data    # regenerate the synthetic dataset (seeded)
-uv run pytest -q                       # 100 tests, no network needed
+uv run pytest -q                       # 89 tests, no network needed
 
 uv run shiny run --host 127.0.0.1 --port 8766 app.py   # the Shiny app
 uv run agentic-stats-app               # same app, host and port from
                                        # AGENTIC_STATS_HOST / AGENTIC_STATS_PORT
 ```
 
-Docker, one service:
-
-```bash
-docker compose up --build              # http://127.0.0.1:8000
-```
-
-The image serves the same app through `shiny run`. The Agent tab needs a reachable
+The Agent tab needs a reachable
 OpenAI-compatible endpoint; Overview and Playground do not.
 
 Ask a question with any OpenAI-compatible endpoint, Ollama by default:
@@ -147,9 +141,7 @@ changes another reader's numbers.
 ## Hosting on Posit Connect Cloud
 
 The free plan runs the app on Posit's servers from a public GitHub repository: 4 GB RAM,
-20 usage credits a month, five applications, public content only. No container, so the
-GHCR image is not involved; the image is still published for Cloud Run, Azure Container
-Apps, or a VM you own.
+20 usage credits a month, five applications, public content only.
 
 Connect Cloud installs from `requirements.txt` and reads nothing else, and that file is
 generated from `uv.lock`:
@@ -183,23 +175,17 @@ from the 20 free credits. Free content is public, so a reader either uses the ke
 set as a secret or types their own into the Agent tab's key field, which stays in server
 memory for that session.
 
-## Releases and hosting
+## Releases
 
-Commits follow [Conventional Commits](https://www.conventionalcommits.org). Pushing to
-`main` makes [release-please](https://github.com/googleapis/release-please) open a
-release PR; merging it bumps the version, writes `CHANGELOG.md`, and creates the tag and
-GitHub Release. `pyproject.toml` is the only place a version is written.
-
-Publishing a release runs `.github/workflows/release.yml`, which:
-
-- attaches the wheel and sdist to the Release and pushes
-  `ghcr.io/antoinelucasfra/agentic-stats` to GHCR, which is how the app is hosted now:
-  `docker run -p 8000:8000 ghcr.io/antoinelucasfra/agentic-stats`.
+Commits follow [Conventional Commits](https://www.conventionalcommits.org), and
+`pyproject.toml` is the only place a version is written. Bump it and tag the release by
+hand: nothing is published automatically and no container image is built.
 
 CI runs one job: ruff, then pytest. The suite covers the statistics, the registry, the
 MCP surface, the CLI agent loop, and the app itself through Shiny's in-memory test
 server, so no browser and no network are needed. The same job regenerates
-`requirements.txt` from `uv.lock` and fails if the two disagree.
+`requirements.txt` from `uv.lock`, fails if the two disagree, then pip-installs it into
+a clean venv and imports the app, which is the path a Connect Cloud deploy takes.
 
 ## Layout
 
