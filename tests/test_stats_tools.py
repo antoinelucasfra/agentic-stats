@@ -55,7 +55,8 @@ def test_mixed_model_does_not_collapse_without_the_covariate():
     assert result.converged
     assert result.group_variance > 100
     assert result.icc > 0.2
-    assert not result.notes
+    # Nothing significant here, so the tool must say so and point at power.
+    assert any("power_analysis" in note for note in result.notes)
 
 
 def test_mixed_model_reports_icc_and_group_count():

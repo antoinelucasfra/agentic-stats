@@ -15,6 +15,25 @@ from utils.config import MAX_UPLOAD_BYTES, UPLOAD_SUFFIXES
 from utils.formatting import number
 
 
+def _column_choices(field: forms.Field, dataset: DatasetDescription):
+    """Dataset columns as select choices, or None when free text stays."""
+    name = field.name
+    if name in ("response", "dose"):
+        return dataset.numeric, False
+    if name == "covariates":
+        return dataset.numeric, True
+    if name in ("factor", "factors", "group", "by", "fixed_effects"):
+        # Any column can group rows: anova_effect on a numeric dose compares its
+        # distinct values, which is what the nitrogen Overview card does.
+        columns = [*dataset.factors, *dataset.numeric]
+        if name in ("group", "by") and not field.required:
+            columns = ["", *columns]
+        return columns, field.kind == "array"
+    if name == "adjust":
+        return ["tukey", "holm", "bonferroni", "fdr_bh"], False
+    return None
+
+
 def field_input(field: forms.Field, args: dict[str, Any], dataset: DatasetDescription) -> Any:
     """One form control, prefilled from a card's arguments or the dataset."""
     label = f"{field.name} *" if field.required else field.name
@@ -24,7 +43,23 @@ def field_input(field: forms.Field, args: dict[str, Any], dataset: DatasetDescri
             field.default if field.default is not None else forms.suggestion(field.name, dataset)
         )
 
-    if field.kind == "enum":
+    columns = _column_choices(field, dataset)
+    if columns is not None:
+        choices, multiple = columns
+        if multiple:
+            selected = (
+                [str(item) for item in value]
+                if isinstance(value, list)
+                else ([str(value)] if value else [])
+            )
+            selected = [item for item in selected if item in choices] or None
+            control = ui.input_selectize(
+                field.name, label, choices=choices, selected=selected, multiple=True
+            )
+        else:
+            selected = str(value) if value in choices else (choices[0] if choices else None)
+            control = ui.input_select(field.name, label, choices=choices, selected=selected)
+    elif field.kind == "enum":
         control = ui.input_select(
             field.name, label, choices=field.choices, selected=str(value) if value else None
         )

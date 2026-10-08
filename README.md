@@ -4,7 +4,7 @@ Statistical analysis of a real agronomy split-plot trial, exposed to LLM agents
 through **MCP**, to scripts through a **CLI agent**, and to anyone with a browser
 through a **Shiny for Python** app.
 
-An agent is handed seven well-described statistical tools instead of a Python
+An agent is handed nine well-described statistical tools instead of a Python
 sandbox. It profiles the data, picks a model, and gets typed results with
 confidence intervals: no code execution and no shell in the loop.
 
@@ -45,7 +45,7 @@ confidence intervals: no code execution and no shell in the loop.
               ┌─────────────▼──┐  ┌────▼──────┐  ┌─▼──────────────────────┐
               │ transports/    │  │ transports│  │ app.py                 │
               │ mcp_server.py  │  │ /agent.py │  │ web/app_ui.py          │
-              │ stdio, 7 tools │  │ CLI loop  │  │ web/panels/overview    │
+              │ stdio, 9 tools │  │ CLI loop  │  │ web/panels/overview    │
               └────────────────┘  └───────────┘  │ web/panels/playground  │
                                                  │ web/panels/agent       │
                                                  └────────────────────────┘
@@ -70,6 +70,8 @@ another module's inputs and the navbar belongs to the root.
 | `check_assumptions` | `(response, fixed_effects, group=None, …)` | Residual normality, Breusch-Pagan, Levene, VIF, Cook's distance, QQ data |
 | `power_analysis` | `(response, factor, alpha=0.05, target_power=0.8, …)` | Power achieved, smallest detectable effect, rows needed per level |
 | `dose_response` | `(response, dose, model="4pl", by=None)` | Four-parameter logistic or quadratic fit, EC50 or peak with a CI, predicted curve |
+| `fit_curve_family` | `(response, dose, by=None)` | Linear, quadratic and 4PL on the same rows, ranked by AIC with ΔAIC |
+| `correlate` | `(columns=None)` | Pearson and Spearman matrices over the numeric columns, strongest pair named |
 
 Tool errors are written for a model to recover from:
 
@@ -172,11 +174,13 @@ Three panels, one page:
   parquet or one you upload, and renders results with the same functions the
   Overview cards use. Uploads are read from the temp file Shiny writes, capped at
   5 MB, and never written to disk; CSV and parquet both work.
-- **Agent** is a chat over the same seven tools: `chatlas` with
+- **Agent** is a chat over the same nine tools: `chatlas` with
   `ChatOpenAICompletions`, so Ollama, vLLM, LM Studio, Groq and OpenAI all work.
-  Model, base URL and key are sidebar inputs; the key stays in server memory for that
-  session and falls back to `AGENTIC_STATS_LLM_API_KEY`. Tool calls, their arguments
-  and their errors are visible in the transcript.
+  A preset select fills model and endpoint: Demo (no key needed) runs on the
+  server's `AGENTIC_STATS_LLM_API_KEY`, the Ollama presets need nothing local,
+  and the rest take the key you type, kept in server memory for that session.
+  Every tool call lands in the transcript as `tool(args)` with a one-line result,
+  so you watch the model work.
 
 Charts are plotnine figures encoded as inline PNGs, so tables and charts come from the
 same result objects on every surface. An uploaded table is scoped to its session through
@@ -215,7 +219,7 @@ secret variables rather than in the repo:
 | --- | --- |
 | `AGENTIC_STATS_LLM_BASE_URL` | an OpenAI-compatible endpoint, for example `https://api.openai.com/v1` |
 | `AGENTIC_STATS_LLM_MODEL` | the model name |
-| `AGENTIC_STATS_LLM_API_KEY` | the key |
+| `AGENTIC_STATS_LLM_API_KEY` | the key; a free Groq key makes the Demo preset work with no typing |
 
 Republish on push is on by default, which replaces the GitHub Pages job that used to
 deploy this. On the first deploy, check that Overview and Playground answer without an
@@ -233,7 +237,7 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org), and
 hand: nothing is published automatically and no container image is built.
 
 CI runs one job: ruff, then pytest. The suite covers the statistics, the registry, the
-MCP surface, the CLI agent loop, and the app itself through Shiny's in-memory test
+MCP surface, the CLI agent loop, a scripted eight-question agent benchmark, and the app itself through Shiny's in-memory test
 server, so no browser and no network are needed: `tests/conftest.py` points every tool
 at the 72-row fixture in `tests/fixtures/`. The same job pre-warms the parquet cache,
 regenerates `requirements.txt` from `uv.lock`, fails if the two disagree, then

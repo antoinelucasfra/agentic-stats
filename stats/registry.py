@@ -65,6 +65,8 @@ TOOLS: list[ToolSpec] = [
     spec(stats_tools.check_assumptions),
     spec(stats_tools.power_analysis),
     spec(stats_tools.dose_response),
+    spec(stats_tools.fit_curve_family),
+    spec(stats_tools.correlate),
 ]
 
 

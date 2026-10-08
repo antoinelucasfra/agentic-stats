@@ -268,3 +268,66 @@ def test_anova_effect_reports_effect_size_and_variance_check():
     result = stats_tools.anova_effect("grain", "nitrogen")
     assert result.partial_eta_squared == pytest.approx(0.3851, abs=0.01)
     assert 0 <= result.levene_p_value <= 1
+
+
+def test_curve_family_picks_the_supported_shape_on_oats():
+    result = stats_tools.fit_curve_family("grain", "nitrogen")
+
+    assert len(result.comparisons) == 1
+    comparison = result.comparisons[0]
+    assert {candidate.model for candidate in comparison.candidates} == {
+        "linear",
+        "quadratic",
+        "4pl",
+    }
+    assert all(candidate.converged for candidate in comparison.candidates)
+    assert comparison.best in {"linear", "quadratic", "4pl"}
+    assert set(comparison.delta_aic) == {candidate.model for candidate in comparison.candidates} - {
+        comparison.best
+    }
+    assert all(gap >= 0 for gap in comparison.delta_aic.values())
+
+
+def test_curve_family_repeats_the_comparison_per_group():
+    result = stats_tools.fit_curve_family("grain", "nitrogen", by="variety")
+
+    assert [comparison.group for comparison in result.comparisons] == [
+        "golden rain",
+        "marvellous",
+        "victory",
+    ]
+    assert all(comparison.best for comparison in result.comparisons)
+
+
+def test_curve_family_names_the_saturating_shape(sigmoid):
+    comparison = stats_tools.fit_curve_family("signal", "dose").comparisons[0]
+
+    assert comparison.best == "4pl"
+    assert comparison.delta_aic["linear"] > 10
+
+
+def test_curve_family_rejects_a_negative_dose(monkeypatch, tmp_path):
+    use_csv(
+        monkeypatch,
+        tmp_path,
+        pd.DataFrame({"nitrogen": [-1.0, 0.0, 1.0], "grain": [1.0, 2.0, 3.0]}),
+    )
+    with pytest.raises(stats_tools.ToolError, match="negative"):
+        stats_tools.fit_curve_family("grain", "nitrogen")
+
+
+def test_correlate_reports_pearson_and_spearman():
+    result = stats_tools.correlate()
+
+    assert set(result.columns) == {"grain", "nitrogen"}
+    assert result.n_obs == 72
+    assert result.pearson["grain"]["nitrogen"] == pytest.approx(0.613, abs=0.01)
+    assert result.spearman["grain"]["grain"] == 1.0
+    assert any("nitrogen-grain" in note for note in result.notes)
+
+
+def test_correlate_rejects_non_numeric_and_lone_columns():
+    with pytest.raises(stats_tools.ToolError, match="not numeric"):
+        stats_tools.correlate(["grain", "variety"])
+    with pytest.raises(stats_tools.ToolError, match="at least two"):
+        stats_tools.correlate(["grain"])

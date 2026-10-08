@@ -6,7 +6,8 @@ from shiny import module, ui
 
 from transports import llm
 
-DEFAULT_MODEL, DEFAULT_BASE_URL, DEFAULT_API_KEY = llm.settings()
+PRESET = llm.preset_default()
+_DEFAULTS = llm.preset_by_id(PRESET)
 
 
 @module.ui
@@ -15,17 +16,25 @@ def agent_ui() -> ui.NavPanel:
         "Agent",
         ui.layout_sidebar(
             ui.sidebar(
-                ui.input_text("model", "Model", value=DEFAULT_MODEL),
-                ui.input_text("base_url", "Endpoint base URL", value=DEFAULT_BASE_URL),
+                ui.input_select(
+                    "preset",
+                    "Preset",
+                    choices={preset.id: preset.label for preset in llm.PRESETS},
+                    selected=PRESET,
+                ),
+                ui.input_text("model", "Model", value=_DEFAULTS.model),
+                ui.input_text("base_url", "Endpoint base URL", value=_DEFAULTS.base_url),
                 ui.input_password(
                     "api_key",
                     "API key",
-                    value=DEFAULT_API_KEY,
-                    placeholder="optional, kept in this session only",
+                    value="",
+                    placeholder="blank for the Demo and Ollama presets",
                 ),
                 ui.tags.p(
-                    "Any OpenAI-compatible endpoint: Ollama, vLLM, LM Studio, Groq, OpenAI. "
-                    "Changing these starts a fresh model context.",
+                    "Demo runs on the server's key: nothing to enter. Ollama runs "
+                    "locally with no key. The other presets use the key you type, "
+                    "kept in this session only. Changing preset or endpoint starts "
+                    "a fresh model context.",
                     class_="text-muted small",
                 ),
                 width=380,

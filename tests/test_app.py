@@ -117,22 +117,22 @@ def test_open_in_playground_prefills_the_form(ts):
     ts.set_inputs(**{TOOL: "anova_effect"})
 
     html = rendered(ts.get_output(FORM))
-    assert 'value="grain"' in html
-    assert 'value="nitrogen"' in html
+    assert '<option value="grain" selected' in html
+    assert '<option value="nitrogen" selected' in html
 
 
 def test_switching_tools_clears_the_prefilled_arguments(ts):
     ts.set_inputs(**{TOOL: "describe_dataset"})
     ts.set_inputs(**{"overview-open_nitrogen": 1})
     ts.set_inputs(**{TOOL: "anova_effect"})
-    assert 'value="nitrogen"' in rendered(ts.get_output(FORM))
+    assert '<option value="nitrogen" selected' in rendered(ts.get_output(FORM))
 
     # Away and back: the card's arguments are gone, the suggestion is back.
     ts.set_inputs(**{TOOL: "describe_dataset"})
     ts.set_inputs(**{TOOL: "anova_effect"})
     html = rendered(ts.get_output(FORM))
-    assert 'value="nitrogen"' not in html
-    assert 'value="variety"' in html
+    assert '<option value="nitrogen" selected' not in html
+    assert '<option value="variety" selected' in html
 
 
 def test_uploaded_csv_replaces_the_dataset(ts, tmp_path):

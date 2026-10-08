@@ -104,6 +104,7 @@ def dataset_blocks(result: DatasetDescription) -> list[Block]:
                 for column in result.columns
             ],
         ),
+        *notes(result.notes),
     ]
 
 
@@ -370,6 +371,47 @@ def dose_blocks(result: DoseResponseResult) -> list[Block]:
     return blocks
 
 
+def family_blocks(result: Any) -> list[Block]:
+    blocks: list[Block] = []
+    for comparison in result.comparisons:
+        if comparison.group:
+            blocks.append(Block("heading", ui.tags.h4(comparison.group)))
+        blocks.append(
+            table(
+                ["Shape", "Converged", "R squared", "AIC", "ΔAIC"],
+                [
+                    [
+                        candidate.model,
+                        str(candidate.converged),
+                        fmt(candidate.r_squared, 4),
+                        fmt(candidate.aic, 1),
+                        fmt(comparison.delta_aic.get(candidate.model, 0.0), 1)
+                        if candidate.model != comparison.best
+                        else "winner",
+                    ]
+                    for candidate in comparison.candidates
+                ],
+            )
+        )
+        blocks.extend(notes(comparison.notes))
+    return blocks
+
+
+def correlation_blocks(result: Any) -> list[Block]:
+    columns = result.columns
+    return [
+        metrics([("Rows", str(result.n_obs)), ("Columns", ", ".join(columns))]),
+        table(
+            ["", *columns],
+            [
+                [row, *[fmt(result.pearson[row][column], 3) for column in columns]]
+                for row in columns
+            ],
+        ),
+        *notes([*result.notes, "Spearman (rank) values live in the raw JSON."]),
+    ]
+
+
 _VIEWS: dict[str, Callable[[Any], list[Block]]] = {
     "describe_dataset": dataset_blocks,
     "fit_mixed_model": mixed_blocks,
@@ -378,6 +420,8 @@ _VIEWS: dict[str, Callable[[Any], list[Block]]] = {
     "check_assumptions": checks_blocks,
     "power_analysis": power_blocks,
     "dose_response": dose_blocks,
+    "fit_curve_family": family_blocks,
+    "correlate": correlation_blocks,
 }
 
 

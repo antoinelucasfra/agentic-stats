@@ -15,7 +15,7 @@ from stats import registry, views
 from stats.stats_tools import DatasetDescription
 from utils.config import CARDS
 
-# Computed once at import: all seven tools together cost well under a second.
+# Computed once at import: all nine tools together cost well under a second.
 DATASET: DatasetDescription = registry.get("describe_dataset").handler()
 OVERVIEW: dict[str, Any] = {
     card["id"]: registry.get(card["tool"]).handler(**card["args"]) for card in CARDS

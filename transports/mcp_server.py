@@ -24,6 +24,17 @@ Typical flow:
    within a higher-level unit such as a block: it separates block variability
    from the effect of interest.
 
+Which tool answers which question:
+- Readings repeated within a block: fit_mixed_model(..., group="block"), and
+  quote the ICC, not just the fixed effects. Plain anova_effect on a grouping
+  factor double-counts the subplot replication.
+- Before quoting an effect, ask power_analysis whether the design can resolve it
+  at all: a non-significant p-value with low achieved power is underpowered,
+  not a finding of no effect.
+- Any dose question: dose_response for one curve, fit_curve_family to compare
+  shapes on the same rows; repeat their notes about range
+  extrapolation verbatim. An EC50 outside the tested range is not a finding.
+
 Call describe_dataset() first rather than guessing column names.
 """.strip()
 

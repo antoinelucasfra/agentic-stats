@@ -63,6 +63,7 @@ class DatasetDescription(BaseModel):
     columns: list[ColumnSummary]
     factors: list[str] = Field(description="Categorical columns available as fixed effects")
     numeric: list[str] = Field(description="Continuous columns available as responses")
+    notes: list[str] = Field(default_factory=list)
 
 
 class FixedEffect(BaseModel):
@@ -237,6 +238,38 @@ class DoseResponseResult(BaseModel):
     response: str
     dose: str
     fits: list[DoseResponseFit]
+
+
+class CandidateFit(BaseModel):
+    model: str
+    converged: bool
+    r_squared: float | None = None
+    aic: float | None = None
+
+
+class FamilyComparison(BaseModel):
+    group: str | None = None
+    n_obs: int
+    candidates: list[CandidateFit]
+    best: str = Field(description="Lowest-AIC converged model, or '' when none converged")
+    delta_aic: dict[str, float] = Field(
+        default_factory=dict, description="AIC above the winner, per converged model"
+    )
+    notes: list[str] = Field(default_factory=list)
+
+
+class CurveFamilyResult(BaseModel):
+    response: str
+    dose: str
+    comparisons: list[FamilyComparison]
+
+
+class CorrelationResult(BaseModel):
+    columns: list[str]
+    n_obs: int
+    pearson: dict[str, dict[str, float]]
+    spearman: dict[str, dict[str, float]]
+    notes: list[str] = Field(default_factory=list)
 
 
 @lru_cache(maxsize=8)
@@ -515,13 +548,28 @@ def describe_dataset() -> DatasetDescription:
     a model response.
     """
     frame = _frame()
+    factors = [c for c in frame.columns if not pd.api.types.is_numeric_dtype(frame[c])]
+    numeric = [c for c in frame.columns if pd.api.types.is_numeric_dtype(frame[c])]
+    group = next((c for c in ("block", "batch", "lot") if c in factors), None)
+    hint = (
+        "Suggested flow: anova_effect for a quick level comparison, "
+        + (
+            f"fit_mixed_model with group='{group}' when readings repeat within a "
+            "block (quote the ICC), "
+            if group
+            else ""
+        )
+        + "dose_response for the dose question, power_analysis before trusting "
+        "a non-significant p-value."
+    )
     return DatasetDescription(
         path=str(dataset_path()),
         n_rows=len(frame),
         n_columns=len(frame.columns),
         columns=[_summary(frame, c) for c in frame.columns],
-        factors=[c for c in frame.columns if not pd.api.types.is_numeric_dtype(frame[c])],
-        numeric=[c for c in frame.columns if pd.api.types.is_numeric_dtype(frame[c])],
+        factors=factors,
+        numeric=numeric,
+        notes=[hint],
     )
 
 
@@ -578,6 +626,12 @@ def fit_mixed_model(
         )
         for term in _order_terms(fit.params.index, fixed_effects)
     ]
+    if not any(effect.p_value < 0.05 for effect in effects if effect.term != "Intercept"):
+        notes.append(
+            "No fixed effect reaches p < 0.05: absence of evidence, not evidence "
+            "of absence. Run power_analysis on the factor to check whether this "
+            "design can resolve the observed effect at all."
+        )
 
     return MixedModelResult(
         formula=fit.formula,
@@ -1087,7 +1141,7 @@ def power_analysis(
     required_per_group = int(np.ceil(required_total / one_way.k))
     if achieved < target_power:
         notes.append(
-            f"The current design only reaches power {achieved:.2f}; "
+            f"Underpowered: the current design only reaches power {achieved:.2f}; "
             f"{required_per_group} rows per level would reach {target_power:.2f}."
         )
 
@@ -1155,6 +1209,178 @@ def dose_response(
         fits = [_dose_fit(frame, response, dose, model, confidence_level, None)]
 
     return DoseResponseResult(response=response, dose=dose, fits=fits)
+
+
+def fit_curve_family(
+    response: str,
+    dose: str,
+    by: str | None = None,
+    confidence_level: float = 0.95,
+) -> CurveFamilyResult:
+    """Fit every dose-response shape on the same rows and report which wins.
+
+    Fits linear, quadratic and 4PL and ranks them by AIC, so one call answers
+    "does it saturate or keep climbing". A ΔAIC under ~2 means the shapes are
+    indistinguishable on this data: say so instead of naming a winner. With `by`
+    the comparison repeats per level of that factor, e.g. one ranking per variety.
+    """
+    frame = _checked(response, dose, *([by] if by else []))
+    _require_numeric(frame, dose, "Dose")
+    if (frame[dose] < 0).any():
+        raise ToolError(f"Dose '{dose}' has negative values; dose must be zero or positive.")
+    if by:
+        levels = sorted(str(level) for level in frame[by].dropna().unique())
+        if len(levels) > MAX_BY_LEVELS:
+            raise ToolError(
+                f"'by' column '{by}' has {len(levels)} levels (limit {MAX_BY_LEVELS}). "
+                "Compare one group at a time instead."
+            )
+        groups = [(level, frame[frame[by].astype(str) == level]) for level in levels]
+    else:
+        groups = [(None, frame)]
+    return CurveFamilyResult(
+        response=response,
+        dose=dose,
+        comparisons=[
+            _compare_shapes(sub, response, dose, confidence_level, level) for level, sub in groups
+        ],
+    )
+
+
+def correlate(columns: list[str] | None = None) -> CorrelationResult:
+    """Pearson and Spearman correlations over the numeric columns.
+
+    A fast first look at which continuous columns move together, before fitting
+    anything. Correlation is not causation and says nothing about shape: a high
+    grain-nitrogen correlation still needs dose_response for saturating or not.
+    Defaults to every numeric column; needs at least two.
+    """
+    frame = _frame()
+    names = (
+        list(columns)
+        if columns
+        else [c for c in frame.columns if pd.api.types.is_numeric_dtype(frame[c])]
+    )
+    _require(frame, names)
+    for name in names:
+        if not pd.api.types.is_numeric_dtype(frame[name]):
+            raise ToolError(f"'{name}' is not numeric: correlate takes numeric columns only.")
+    if len(names) < 2:
+        raise ToolError("correlate needs at least two numeric columns.")
+    sub = frame[names].astype(float)
+    pearson = sub.corr(method="pearson").round(4)
+    spearman = sub.corr(method="spearman").round(4)
+    best: tuple[str, str, float] | None = None
+    for i, first in enumerate(names):
+        for second in names[i + 1 :]:
+            value = float(pearson.loc[first, second])
+            if best is None or abs(value) > abs(best[2]):
+                best = (first, second, value)
+    notes = []
+    if best is not None:
+        notes.append(
+            f"Strongest linear pair: {best[0]}-{best[1]} (Pearson {best[2]:.2f}). "
+            "Correlation is not causation and says nothing about shape."
+        )
+
+    def as_dict(matrix):
+        return {row: {column: float(matrix.loc[row, column]) for column in names} for row in names}
+
+    return CorrelationResult(
+        columns=names,
+        n_obs=len(sub),
+        pearson=as_dict(pearson),
+        spearman=as_dict(spearman),
+        notes=notes,
+    )
+
+
+def _linear_fit(
+    x: np.ndarray,
+    y: np.ndarray,
+    group: str | None,
+    response: str,
+    dose: str,
+) -> DoseResponseFit:
+    design = pd.DataFrame({dose: x, response: y})
+    try:
+        fitted = smf.ols(f"{response} ~ {dose}", design).fit()
+    except Exception as exc:
+        return _failed_fit(
+            group, "linear", int(x.size), f"Linear fit failed: {type(exc).__name__}: {exc}"
+        )
+    params = fitted.params
+    return DoseResponseFit(
+        group=group,
+        n_obs=int(x.size),
+        model="linear",
+        converged=True,
+        parameters=[
+            FitParameter(
+                name=str(name),
+                estimate=round(float(value), 6),
+                std_error=round(float(np.sqrt(fitted.cov_params().loc[name, name])), 6),
+                ci_low=round(float(fitted.conf_int().loc[name, 0]), 6),
+                ci_high=round(float(fitted.conf_int().loc[name, 1]), 6),
+            )
+            for name, value in params.items()
+        ],
+        r_squared=round(float(fitted.rsquared), 4),
+        aic=round(float(fitted.aic), 2),
+        curve=[],
+        notes=["A straight line cannot saturate: use it as the baseline, not the answer."],
+    )
+
+
+def _compare_shapes(
+    sub: pd.DataFrame,
+    response: str,
+    dose: str,
+    confidence_level: float,
+    group: str | None,
+) -> FamilyComparison:
+    x = sub[dose].to_numpy(dtype=float)
+    y = sub[response].to_numpy(dtype=float)
+    fits = {
+        "linear": _linear_fit(x, y, group, response, dose),
+        "quadratic": _dose_fit(sub, response, dose, "quadratic", confidence_level, group),
+        "4pl": _dose_fit(sub, response, dose, "4pl", confidence_level, group),
+    }
+    candidates = [
+        CandidateFit(model=name, converged=fit.converged, r_squared=fit.r_squared, aic=fit.aic)
+        for name, fit in fits.items()
+    ]
+    ranked = sorted(
+        ((name, fit) for name, fit in fits.items() if fit.converged and fit.aic is not None),
+        key=lambda item: item[1].aic or float("inf"),
+    )
+    if not ranked:
+        return FamilyComparison(
+            group=group,
+            n_obs=int(x.size),
+            candidates=candidates,
+            best="",
+            notes=["No shape converged on these rows."],
+        )
+    best_name, best_fit = ranked[0]
+    winner_aic = float(best_fit.aic or 0.0)
+    delta = {name: round(float(fit.aic or 0.0) - winner_aic, 2) for name, fit in ranked[1:]}
+    notes = [
+        f"'{best_name}' has the lowest AIC ({winner_aic:.1f})"
+        + (
+            "; the rest are within ~2, so the shapes are indistinguishable here."
+            if all(gap < 2 for gap in delta.values())
+            else "."
+        )
+    ]
+    return FamilyComparison(
+        group=group,
+        n_obs=int(x.size),
+        candidates=candidates,
+        best=best_name,
+        delta_aic=delta,
+        notes=[*notes, *best_fit.notes],
+    )
 
 
 def _failed_fit(group: str | None, model: str, n_obs: int, note: str) -> DoseResponseFit:
@@ -1344,6 +1570,12 @@ def _four_pl_fit(
 
     ec50 = float(popt[2])
     ec50_half = half_width(2)
+    lo, hi = float(x.min()), float(x.max())
+    if not lo <= ec50 <= hi:
+        notes.append(
+            f"The EC50 ({ec50:.2f}) falls outside the tested dose range "
+            f"({lo:.2f} to {hi:.2f}); treat it as an extrapolation."
+        )
     return DoseResponseFit(
         group=group,
         n_obs=int(x.size),

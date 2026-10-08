@@ -4,10 +4,27 @@ from __future__ import annotations
 
 from shiny import module, ui
 
-from stats import registry
 from utils.config import UPLOAD_SUFFIXES
 
-TOOL_CHOICES = {spec.name: spec.name for spec in registry.TOOLS}
+TOOL_CHOICES = {
+    "Profile the data": {
+        "describe_dataset": "describe_dataset",
+        "correlate": "correlate",
+    },
+    "Compare levels": {
+        "anova_effect": "anova_effect",
+        "marginal_means": "marginal_means",
+    },
+    "Model with grouping": {
+        "fit_mixed_model": "fit_mixed_model",
+        "check_assumptions": "check_assumptions",
+    },
+    "Design size": {"power_analysis": "power_analysis"},
+    "Dose response": {
+        "dose_response": "dose_response",
+        "fit_curve_family": "fit_curve_family",
+    },
+}
 
 
 @module.ui
