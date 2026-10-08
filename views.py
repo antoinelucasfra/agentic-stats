@@ -8,7 +8,6 @@ which drops the tables to keep the six cards scannable.
 from __future__ import annotations
 
 import json
-import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -16,8 +15,8 @@ from typing import Any, Literal
 import pandas as pd
 from shiny import ui
 
-from agentic_stats import charts
-from agentic_stats.stats_tools import (
+import charts
+from stats_tools import (
     AnovaResult,
     AssumptionChecks,
     DatasetDescription,
@@ -26,6 +25,7 @@ from agentic_stats.stats_tools import (
     MixedModelResult,
     PowerResult,
 )
+from utils.formatting import fmt, fmt_ci, fmt_p, fmt_small
 
 BlockKind = Literal["metrics", "chart", "table", "heading", "warning", "notes", "text"]
 
@@ -38,33 +38,6 @@ class Block:
 
     kind: BlockKind
     tag: Any
-
-
-# --- formatting, matching the browser app -----------------------------------
-
-
-def fmt(value: float | None, digits: int = 4) -> str:
-    if value is None or not math.isfinite(value):
-        return "n/a"
-    if value != 0 and abs(value) < 0.001:
-        return f"{value:.2e}"
-    return f"{value:.{digits}f}"
-
-
-def fmt_p(value: float | None) -> str:
-    if value is None or not math.isfinite(value):
-        return "p = n/a"
-    return "p < 0.001" if value < 0.001 else f"p = {value:.3f}"
-
-
-def fmt_small(value: float | None, digits: int = 3) -> str:
-    if value is None or not math.isfinite(value):
-        return "n/a"
-    return "< 0.001" if value < 0.001 else fmt(value, digits)
-
-
-def fmt_ci(low: float | None, high: float | None, digits: int = 3) -> str:
-    return f"{fmt(low, digits)} to {fmt(high, digits)}"
 
 
 # --- blocks -----------------------------------------------------------------

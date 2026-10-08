@@ -17,7 +17,7 @@ from typing import Any, get_type_hints
 
 from pydantic import BaseModel, create_model
 
-from agentic_stats import stats_tools
+import stats_tools
 
 _EMPTY = inspect.Parameter.empty
 

@@ -1,16 +1,19 @@
 [project]
 name = "agentic-stats"
 version = "0.1.0"
-description = "MCP server and Shiny app exposing statistical analysis of an R&D design-of-experiments dataset to LLM agents"
+description = "Shiny app, MCP server and CLI agent exposing statistical analysis of a real agronomy split-plot trial to LLM agents"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
+    # duckdb fetches the dataset over HTTPS, writes the parquet cache and reads it.
+    "duckdb>=1.1",
     "numpy>=1.26",
     "pandas>=2.2",
     "patsy>=0.5",
     "pydantic>=2.9",
     "scipy>=1.11",
+    "shiny>=1.8.0",
     "statsmodels>=0.14",
 ]
 
@@ -27,28 +30,13 @@ app = [
     "shiny>=1.0",
 ]
 
-[project.scripts]
-agentic-stats-mcp = "agentic_stats.mcp_server:main"
-agentic-stats-agent = "agentic_stats.agent:main"
-agentic-stats-app = "agentic_stats.app:main"
-
 [dependency-groups]
 dev = ["httpx>=0.27", "pytest>=8.3", "ruff>=0.8"]
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/agentic_stats"]
-
-# The dataset lives at data/ in the checkout and is shipped inside the package, so a
-# non-editable install (Connect Cloud) finds it without the repository present.
-[tool.hatch.build.targets.wheel.force-include]
-"data/doe_experiment.csv" = "agentic_stats/data/doe_experiment.csv"
-
-[tool.hatch.build.targets.sdist]
-exclude = ["dist"]
+# This is an application, not a distributable package: `app.py` runs from the
+# checkout, so uv manages a virtual environment instead of installing the project.
+[tool.uv]
+package = false
 
 [tool.ruff]
 line-length = 100
@@ -59,3 +47,4 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]

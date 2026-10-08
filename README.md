@@ -1,6 +1,6 @@
 # agentic-stats
 
-Statistical analysis of an R&D design-of-experiments dataset, exposed to LLM agents
+Statistical analysis of a real agronomy split-plot trial, exposed to LLM agents
 through **MCP**, to scripts through a **CLI agent**, and to anyone with a browser
 through a **Shiny for Python** app.
 
@@ -8,9 +8,9 @@ An agent is handed seven well-described statistical tools instead of a Python
 sandbox. It profiles the data, picks a model, and gets typed results with
 confidence intervals: no code execution and no shell in the loop.
 
-> *"Does formulation B matter, once we account for batch-to-batch variation?"*
+> *"Does the oat variety matter, once we account for block-to-block variation?"*
 > The agent calls `describe_dataset`, then `fit_mixed_model`, then answers with the
-> mixed-model estimate, its 95% CI, and the batch variance component.
+> mixed-model estimate, its 95% CI, and the block variance component.
 
 ## Why this shape
 
@@ -25,8 +25,9 @@ confidence intervals: no code execution and no shell in the loop.
 - **The app is the package.** The Shiny app imports `stats_tools` directly, so the
   numbers on the page are the numbers the tests cover. There is no second
   implementation and no statistics in JavaScript.
-- **Synthetic data, real statistics.** The dataset is generated and seeded, and the
-  models are `statsmodels`. The Agent tab is the only part that needs an endpoint.
+- **Real data, fetched not committed.** `data.py` pulls the trial from Rdatasets
+  over HTTPS and writes a parquet cache with `duckdb`; the repository carries no
+  dataset. The Agent tab is the only part that needs an endpoint.
 
 ## Architecture
 
@@ -43,17 +44,25 @@ confidence intervals: no code execution and no shell in the loop.
                             │          │           │
               ┌─────────────▼──┐  ┌────▼──────┐  ┌─▼──────────────────────┐
               │ mcp_server.py  │  │ agent.py  │  │ app.py (Shiny)         │
-              │ stdio, 7 tools │  │ CLI loop  │  │ Overview · Playground  │
-              └────────────────┘  └───────────┘  │ · Agent                │
+              │ stdio, 7 tools │  │ CLI loop  │  │ modules/overview       │
+              └────────────────┘  └───────────┘  │ modules/playground     │
+                                                 │ modules/agent          │
                                                  └────────────────────────┘
 ```
+
+`app.py` wires `app_ui.py` and `server.py` into an `App`. Each panel is a Shiny
+module under `modules/`, so its inputs are namespaced (`playground-tool`) and two
+panels cannot collide. The only cross-panel state is a `pending` value created in
+`server.py`: the Overview writes a card's tool and arguments into it, the
+Playground selects that tool, and `server.py` switches the navbar, because a module
+cannot address another module's inputs and the navbar belongs to the root.
 
 ## What the tools answer
 
 | Tool | Arguments | Answers |
 | --- | --- | --- |
 | `describe_dataset` | `()` | Columns, dtypes, missing values, ranges; which are factors, which numeric |
-| `fit_mixed_model` | `(response, fixed_effects, group="batch")` | REML fixed effects with 95% CIs, variance components, ICC |
+| `fit_mixed_model` | `(response, fixed_effects, group="block")` | REML fixed effects with 95% CIs, variance components, ICC |
 | `anova_effect` | `(response, factor)` | F-test, p-value, omega-squared, partial eta-squared, Levene |
 | `marginal_means` | `(response, factors, covariates=None, group=None, …)` | Average predicted mean per level with CIs, plus pairwise contrasts |
 | `check_assumptions` | `(response, fixed_effects, group=None, …)` | Residual normality, Breusch-Pagan, Levene, VIF, Cook's distance, QQ data |
@@ -63,7 +72,7 @@ confidence intervals: no code execution and no shell in the loop.
 Tool errors are written for a model to recover from:
 
 ```
-Unknown column(s): ['formulation_id']. Available columns: ['batch', 'formulation', 'dose', ...]
+Unknown column(s): ['nitrogen_rate']. Available columns: ['block', 'variety', 'grain', 'nitrogen']
 ```
 
 The Shiny Playground shows the same message inline, and in the Agent tab the model
@@ -71,37 +80,68 @@ reads the error and retries with corrected arguments. One behaviour, three trans
 
 ## The dataset
 
-`data/doe_experiment.csv` is generated, not collected: 12 pilot batches x 3 formulations
-x 4 dose levels x 3 operators x 4 replicates = **1728 rows** of continuous `assay_signal`,
-with a real batch random effect (SD 2.0) on top of residual noise (SD 1.5). Tests assert
-the model recovers that structure, so the demo cannot silently rot. The build copies it
-into the package, so an installed app carries its dataset instead of reading the
-checkout.
+Nothing is committed. `data.py` downloads the oats split-plot trial from
+Rdatasets and converts it to parquet with `duckdb` on first use, so a fresh
+clone, a wheel, and a deployed app all carry the same 72 rows without a dataset
+in the repository.
+
+The trial is the one Yates (1935) used to introduce the split-plot design: six
+blocks, three oat varieties sown in the whole plots, four nitrogen rates applied
+to the subplots. Grain yield in grams per subplot is the response. Pinheiro and
+Bates (2000) analyse it in *Mixed-Effects Models in S and S-PLUS*.
+
+| Column | Role |
+| --- | --- |
+| `block` | random-effect group, six levels |
+| `variety` | whole-plot factor, three levels, contrasts |
+| `grain` | response, numeric |
+| `nitrogen` | subplot covariate and dose, four levels |
+
+`yield` is the name in the source CSV; it becomes `grain` because `yield` is a
+Python keyword and patsy parses formulas as Python. Keyword columns still work
+if you upload one: the tools quote them with patsy's `Q()`.
+
+```bash
+uv run python -m utils.data            # fetch into the cache
+uv run python -m utils.data --force    # refetch
+```
+
+The cache is `<tempdir>/agentic_stats/oats.parquet`, with an
+`oats.parquet.meta.json` recording the source URL, fetch time, row count and
+sha256. Two environment variables move it: `AGENTIC_STATS_CACHE` for the
+directory, `AGENTIC_STATS_DATA` for an explicit CSV or parquet path (that is how
+the test suite runs offline against a committed fixture).
 
 Sanity numbers, so you can check the demo against something:
 
 | Call | Result |
 | --- | --- |
-| `anova_effect("assay_signal", "formulation")` | F 549.0, omega-squared 0.388, Levene p 0.20 |
-| `marginal_means("assay_signal", ["formulation"], covariates=["dose"])` | A 21.44, B 24.78, C 19.71; B - A = +3.34 (95% CI 3.06 to 3.61) |
-| `fit_mixed_model("assay_signal", ["formulation", "dose"])` | batch variance 3.60, residual 2.26, ICC 0.61 |
-| `power_analysis("assay_signal", "formulation")` | Cohen's f 0.80, power 1.00, 7 rows per level would suffice |
-| `check_assumptions(...)` | OLS residuals depart from normality (batch variation is unmodelled); the mixed model's do not (p 0.50) |
+| `anova_effect("grain", "nitrogen")` | F 14.2, omega-squared 0.355, Levene p 0.98 |
+| `marginal_means("grain", ["variety"], covariates=["nitrogen"])` | Golden Rain 104.50, Marvellous 109.79, Victory 97.63; no pair significant |
+| `fit_mixed_model("grain", ["variety", "nitrogen"])` | block variance 245.0, residual 234.7, ICC 0.511 |
+| `power_analysis("grain", "nitrogen")` | Cohen's f 0.77, power 1.00, 6 rows per level would suffice |
+| `check_assumptions(...)` | OLS residuals depart from normality (p 0.025, blocks unmodelled); the mixed model's do not (p 0.18) |
 
-That last row is the point of the fourth tool: the OLS residual test fails precisely
-because the batch effect is missing, and adding the random intercept fixes it.
+That last row is the point of the fourth tool: the OLS residual test fails
+precisely because the block effect is missing, and adding the random intercept
+fixes it. Variety is the honest negative result: F 1.23, p 0.30, which is why the
+power card and the variety card both say the design cannot settle it.
 
 ## Run it
 
 ```bash
 uv sync --all-extras --all-groups      # Python 3.12+, deps resolved and locked
-uv run python -m agentic_stats.data    # regenerate the synthetic dataset (seeded)
-uv run pytest -q                       # 89 tests, no network needed
+uv run python -m utils.data            # fetch the trial into the parquet cache
+uv run --all-extras pytest -q          # 91 tests, no network needed
 
 uv run shiny run --host 127.0.0.1 --port 8766 app.py   # the Shiny app
-uv run agentic-stats-app               # same app, host and port from
+uv run python app.py                   # same app, host and port from
                                        # AGENTIC_STATS_HOST / AGENTIC_STATS_PORT
 ```
+
+The stats core needs no web server, so Shiny and the chat client live in extras.
+`--all-extras` is what makes the app, the MCP server and the CLI runnable; a bare
+`uv run` syncs the core and the dev group only.
 
 The Agent tab needs a reachable
 OpenAI-compatible endpoint; Overview and Playground do not.
@@ -110,7 +150,8 @@ Ask a question with any OpenAI-compatible endpoint, Ollama by default:
 
 ```bash
 ollama pull qwen2.5:7b
-uv run agentic-stats-agent "Which formulation should we scale up, and why?"
+uv run python agent.py "Which oat variety should we scale up, and why?"
+uv run python mcp_server.py            # the same tools over stdio, for any MCP client
 ```
 
 ## The Shiny app
@@ -121,14 +162,14 @@ uv run shiny run --host 127.0.0.1 --port 8766 app.py
 
 Three panels, one page:
 
-- **Overview** answers six questions from the shipped data, computed once when the
+- **Overview** answers six questions from the fetched trial, computed once when the
   process starts. Every card has an *Open in playground* button that carries the tool
   and its arguments across.
 - **Playground** builds its form from `registry`, so a tool added in Python appears
-  with no UI change. It runs the tool in the server process against the shipped CSV
-  or one you upload, and renders results with the same functions the Overview cards
-  use. Uploads are read from the temp file Shiny writes, capped at 5 MB, and never
-  written to disk.
+  with no UI change. It runs the tool in the server process against the cached
+  parquet or one you upload, and renders results with the same functions the
+  Overview cards use. Uploads are read from the temp file Shiny writes, capped at
+  5 MB, and never written to disk; CSV and parquet both work.
 - **Agent** is a chat over the same seven tools: `chatlas` with
   `ChatOpenAICompletions`, so Ollama, vLLM, LM Studio, Groq and OpenAI all work.
   Model, base URL and key are sidebar inputs; the key stays in server memory for that
@@ -136,7 +177,7 @@ Three panels, one page:
   and their errors are visible in the transcript.
 
 Charts are plotnine figures encoded as inline PNGs, so tables and charts come from the
-same result objects on every surface. An uploaded CSV is scoped to its session through
+same result objects on every surface. An uploaded table is scoped to its session through
 a `contextvars` override in `stats_tools.use_frame`, so one reader's file never
 changes another reader's numbers.
 
@@ -155,10 +196,14 @@ uv export --no-dev --format requirements-txt --no-hashes --no-header --extra app
 `--no-dev` keeps the dev group out, so Connect Cloud does not install pytest and ruff.
 
 CI regenerates it and diffs it against the committed copy, so a dependency change that
-was not exported fails the build. The first line is `.`: the project installed
-non-editable, because Connect Cloud builds a wheel from the checkout. `uv export` writes
-`-e .` (the editable install a dev environment uses), so CI substitutes it before the
-diff, and the wheel carries `agentic_stats/data/doe_experiment.csv` for the app to read.
+was not exported fails the build. The file lists dependencies only: there is no `.`
+line, because the app is not a package and Connect Cloud runs `app.py` from the
+checkout, where `modules/` and `utils/` sit next to it.
+
+The dataset is not shipped. On the platform the app downloads the CSV from Rdatasets
+and writes the parquet cache on first use, so the deploy needs outbound HTTPS and a
+writable temp directory. Warm the cache before a demo by opening the Overview once, or
+set `AGENTIC_STATS_DATA` to a path you ship yourself.
 
 To deploy: **Publish** in Connect Cloud, framework **Shiny for Python**, the repository
 and branch, primary file **app.py**, Python **3.12**. Add the Agent tab's endpoint as
@@ -187,40 +232,62 @@ hand: nothing is published automatically and no container image is built.
 
 CI runs one job: ruff, then pytest. The suite covers the statistics, the registry, the
 MCP surface, the CLI agent loop, and the app itself through Shiny's in-memory test
-server, so no browser and no network are needed. The same job regenerates
-`requirements.txt` from `uv.lock`, fails if the two disagree, then pip-installs it into
-a clean venv and imports the app, which is the path a Connect Cloud deploy takes.
+server, so no browser and no network are needed: `tests/conftest.py` points every tool
+at the 72-row fixture in `tests/fixtures/`. The same job pre-warms the parquet cache,
+regenerates `requirements.txt` from `uv.lock`, fails if the two disagree, then
+pip-installs it into a clean venv and imports the app, which is the path a Connect Cloud
+deploy takes.
 
 ## Layout
 
 ```
-src/agentic_stats/
-  stats_tools.py   pure statistical functions + pydantic result models
-  registry.py      derives each tool's schema from its function signature
-  mcp_server.py    MCPServer over stdio, built from the registry
-  agent.py         CLI tool-calling loop + OpenAI-compatible backend
-  data.py          synthetic DOE generator (seeded)
-  app.py           Shiny app: Overview, Playground, Agent
-  views.py         one renderer per tool: metrics, charts, tables, notes
-  charts.py        plotnine figures, encoded as inline PNGs
-  forms.py         JSON Schema to form fields, and field values back to arguments
-  llm.py           chatlas client with the registry tools attached
-app.py             `shiny run app.py` entry point
-tests/             tools, registry, MCP wiring, agent loop, app, views, forms
+app.py            entry point: App(app_ui, server), and `python app.py`
+app_ui.py         the navbar, assembling one module per panel
+server.py         the root server, and the only shared state between panels
+
+modules/
+  overview/       ui.py, server.py: the six cards, computed at import
+  playground/     ui.py, server.py, helpers.py: tool picker, form, upload
+  agent/          ui.py, server.py: chatlas client with the tools attached
+
+utils/
+  config.py       constants, paths, the card definitions, panel ids
+  data.py         fetch + parquet cache for the oats split-plot trial
+  formatting.py   number and p-value formatting
+
+stats_tools.py    pure statistical functions + pydantic result models
+registry.py       derives each tool's schema from its function signature
+mcp_server.py     MCPServer over stdio, built from the registry
+agent.py          CLI tool-calling loop + OpenAI-compatible backend
+views.py          one renderer per tool: metrics, charts, tables, notes
+charts.py         plotnine figures, encoded as inline PNGs
+forms.py          JSON Schema to form fields, and field values back to arguments
+llm.py            chatlas client with the registry tools attached
+tests/            tools, registry, MCP wiring, agent loop, app, views, forms
 ```
+
+This is an application, not a distributable package: `app.py` runs from the
+checkout, uv manages the environment (`package = false`), and `requirements.txt`
+lists dependencies only.
 
 ## Limitations (deliberate)
 
-- Synthetic data. The statistics are real, the biology is not.
+- One dataset, one design. Swap it with `AGENTIC_STATS_DATA`, but the tools assume a
+  response column, a categorical factor, a numeric dose and a grouping column.
+- Real data, small trial. 72 rows and six blocks is what Yates ran in 1935, so the
+  variety effect is genuinely underpowered here; that is the demo, not a defect.
+- The app fetches the dataset on first use. Offline, without `AGENTIC_STATS_DATA`,
+  `describe_dataset` fails with a message naming the fetch command.
 - No auth, no rate limiting, no queueing. The demo is a demo, and the Agent tab can
   be pointed at any OpenAI-compatible endpoint from the sidebar, so do not host it
   publicly without gating that.
 - The Agent tab needs a reachable endpoint. Bigger models are better at choosing
   tools, but they are still choosing tools, not doing statistics.
-- An uploaded CSV runs against whatever columns it has; the tools report unknown
-  columns the same way they do for the shipped dataset.
-- The dose response does not turn over inside the tested range, so `dose_response`
-  reports the quadratic peak as an extrapolation rather than a finding.
+- An uploaded table runs against whatever columns it has; the tools report unknown
+  columns the same way they do for the fetched trial.
+- Four nitrogen levels are the whole dose range. The 4PL fits, but the EC50 it prints
+  for Marvellous (6.0) sits far outside 0 to 0.6, and the quadratic peak is reported
+  as an extrapolation: with four doses, treat both as shape, not as potency.
 
 ## License
 

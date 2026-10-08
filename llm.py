@@ -14,14 +14,15 @@ from typing import Any
 import chatlas
 from chatlas import ContentToolResult
 
-from agentic_stats import registry
+import registry
 
 DEFAULT_BASE_URL = "http://127.0.0.1:11434/v1"
 DEFAULT_MODEL = "qwen2.5:7b"
 
 SYSTEM_PROMPT = (
-    "You answer questions about a design-of-experiments dataset. Every number you "
-    "report must come from a tool call: profile the data with describe_dataset "
+    "You answer questions about an agronomy trial: oat varieties in the whole "
+    "plots, nitrogen rates in the subplots, replicated over blocks. Every number "
+    "you report must come from a tool call: profile the data with describe_dataset "
     "first, then fit the model the question needs. Quote estimates with their "
     "confidence intervals and name the tool that produced them. When a tool "
     "returns an error, read the message and retry with corrected arguments."

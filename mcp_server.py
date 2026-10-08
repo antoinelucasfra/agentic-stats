@@ -11,17 +11,17 @@ from __future__ import annotations
 
 from mcp.server.mcpserver import MCPServer
 
-from agentic_stats import registry
+import registry
 
 INSTRUCTIONS = """
-Statistical analysis of an R&D design-of-experiments dataset (formulation x dose x
-operator, replicated within pilot batches).
+Statistical analysis of a real agronomy split-plot trial: three oat varieties in the
+whole plots, four nitrogen rates in the subplots, replicated over six blocks.
 
 Typical flow:
 1. describe_dataset() to learn the columns, which are factors, which are numeric.
 2. anova_effect(response, factor) for a quick level comparison and effect size.
 3. fit_mixed_model(response, fixed_effects, group) when readings are replicated
-   within a higher-level unit such as a batch: it separates batch variability
+   within a higher-level unit such as a block: it separates block variability
    from the effect of interest.
 
 Call describe_dataset() first rather than guessing column names.

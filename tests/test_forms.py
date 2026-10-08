@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from agentic_stats import forms, registry, stats_tools
+import forms
+import registry
+import stats_tools
 
 
 def fields_for(tool: str) -> list[forms.Field]:
@@ -53,8 +55,8 @@ def test_arguments_split_arrays_and_drop_empty_optionals():
     arguments = forms.arguments(
         fields,
         {
-            "response": "assay_signal",
-            "factors": "formulation, dose",
+            "response": "grain",
+            "factors": "variety, nitrogen",
             "covariates": "",
             "confidence_level": 0.9,
             "pairwise": True,
@@ -62,8 +64,8 @@ def test_arguments_split_arrays_and_drop_empty_optionals():
     )
 
     assert arguments == {
-        "response": "assay_signal",
-        "factors": ["formulation", "dose"],
+        "response": "grain",
+        "factors": ["variety", "nitrogen"],
         "confidence_level": 0.9,
         "pairwise": True,
     }
@@ -85,9 +87,9 @@ def test_suggestions_come_from_the_dataset_columns():
     description = stats_tools.describe_dataset()
 
     assert forms.suggestion("response", description) in description.numeric
-    assert forms.suggestion("factor", description) == "formulation"
-    assert forms.suggestion("fixed_effects", description) == "formulation"
-    assert forms.suggestion("group", description) == "batch"
-    assert forms.suggestion("dose", description) == "dose"
-    assert forms.suggestion("covariates", description) != "assay_signal"
+    assert forms.suggestion("factor", description) == "variety"
+    assert forms.suggestion("fixed_effects", description) == "variety"
+    assert forms.suggestion("group", description) == "block"
+    assert forms.suggestion("dose", description) == "nitrogen"
+    assert forms.suggestion("covariates", description) != "grain"
     assert forms.suggestion("top_outliers", description) == ""

@@ -1,0 +1,73 @@
+block,variety,nitrogen,grain
+i,victory,0.0,111
+i,victory,0.2,130
+i,victory,0.4,157
+i,victory,0.6,174
+i,golden rain,0.0,117
+i,golden rain,0.2,114
+i,golden rain,0.4,161
+i,golden rain,0.6,141
+i,marvellous,0.0,105
+i,marvellous,0.2,140
+i,marvellous,0.4,118
+i,marvellous,0.6,156
+ii,victory,0.0,61
+ii,victory,0.2,91
+ii,victory,0.4,97
+ii,victory,0.6,100
+ii,golden rain,0.0,70
+ii,golden rain,0.2,108
+ii,golden rain,0.4,126
+ii,golden rain,0.6,149
+ii,marvellous,0.0,96
+ii,marvellous,0.2,124
+ii,marvellous,0.4,121
+ii,marvellous,0.6,144
+iii,victory,0.0,68
+iii,victory,0.2,64
+iii,victory,0.4,112
+iii,victory,0.6,86
+iii,golden rain,0.0,60
+iii,golden rain,0.2,102
+iii,golden rain,0.4,89
+iii,golden rain,0.6,96
+iii,marvellous,0.0,89
+iii,marvellous,0.2,129
+iii,marvellous,0.4,132
+iii,marvellous,0.6,124
+iv,victory,0.0,74
+iv,victory,0.2,89
+iv,victory,0.4,81
+iv,victory,0.6,122
+iv,golden rain,0.0,64
+iv,golden rain,0.2,103
+iv,golden rain,0.4,132
+iv,golden rain,0.6,133
+iv,marvellous,0.0,70
+iv,marvellous,0.2,89
+iv,marvellous,0.4,104
+iv,marvellous,0.6,117
+v,victory,0.0,62
+v,victory,0.2,90
+v,victory,0.4,100
+v,victory,0.6,116
+v,golden rain,0.0,80
+v,golden rain,0.2,82
+v,golden rain,0.4,94
+v,golden rain,0.6,126
+v,marvellous,0.0,63
+v,marvellous,0.2,70
+v,marvellous,0.4,109
+v,marvellous,0.6,99
+vi,victory,0.0,53
+vi,victory,0.2,74
+vi,victory,0.4,118
+vi,victory,0.6,113
+vi,golden rain,0.0,89
+vi,golden rain,0.2,82
+vi,golden rain,0.4,86
+vi,golden rain,0.6,104
+vi,marvellous,0.0,97
+vi,marvellous,0.2,99
+vi,marvellous,0.4,119
+vi,marvellous,0.6,121

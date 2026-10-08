@@ -1,4 +1,4 @@
-"""Statistical tools over an R&D design-of-experiments dataset.
+"""Statistical tools over a real agronomy split-plot trial.
 
 Pure functions: no MCP, no HTTP. The MCP server, the CLI agent and the Shiny
 app all call them, so what the tests cover is what ships.
@@ -9,6 +9,7 @@ Errors are raised as `ToolError`, whose message is written for an LLM to act on
 
 from __future__ import annotations
 
+import keyword
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -31,7 +32,8 @@ from statsmodels.stats.multitest import multipletests
 from statsmodels.stats.outliers_influence import OLSInfluence, variance_inflation_factor
 from statsmodels.stats.power import FTestAnovaPower
 
-from agentic_stats.data import DATA_PATH
+from utils import config
+from utils import data as dataset
 
 # Guards against a tool call that would return more than a model can read.
 MAX_LEVELS = 50
@@ -239,8 +241,8 @@ class DoseResponseResult(BaseModel):
 
 @lru_cache(maxsize=8)
 def _read(path: str, mtime_ns: int, size: int) -> pd.DataFrame:
-    # `mtime_ns` and `size` exist to key the cache: editing the CSV reloads it.
-    frame = pd.read_csv(path)
+    # `mtime_ns` and `size` exist to key the cache: editing the file reloads it.
+    frame = dataset.read_parquet(path) if Path(path).suffix == ".parquet" else pd.read_csv(path)
     if frame.empty:
         raise ToolError(f"Dataset at {path} is empty.")
     return frame
@@ -250,16 +252,21 @@ def _load(path: str) -> pd.DataFrame:
     file = Path(path)
     if not file.exists():
         raise ToolError(
-            f"Dataset not found at {file}. Generate it with `python -m agentic_stats.data`, "
-            "or point AGENTIC_STATS_DATA at a CSV with the same columns."
+            f"Dataset not found at {file}. Fetch it with `{config.FETCH_COMMAND}`, "
+            "or point AGENTIC_STATS_DATA at a CSV or parquet with the same columns."
         )
     stat = file.stat()
     return _read(str(file.resolve()), stat.st_mtime_ns, stat.st_size)
 
 
 def dataset_path() -> Path:
-    """Resolve the dataset path, overridable with AGENTIC_STATS_DATA."""
-    return Path(os.environ.get("AGENTIC_STATS_DATA", DATA_PATH))
+    """Resolve the dataset path, overridable with AGENTIC_STATS_DATA.
+
+    With no override this fetches and caches the parquet on first use, so a
+    fresh process has a dataset without a build step.
+    """
+    override = os.environ.get("AGENTIC_STATS_DATA")
+    return Path(override) if override else dataset.ensure()
 
 
 def load_dataset() -> pd.DataFrame:
@@ -350,6 +357,20 @@ class _Fit:
 # about 0.1s on this dataset.
 MIXED_METHOD = "powell"
 
+_KEYWORDS = frozenset(keyword.kwlist)
+
+
+def _term(name: str) -> str:
+    """A formula-safe column reference.
+
+    patsy parses the formula as Python, so a column called `yield` raises a
+    SyntaxError. Quoting it with patsy's Q() keeps real datasets usable; the
+    quoted name shows up verbatim in the fitted coefficient names.
+    """
+    if name.isidentifier() and name not in _KEYWORDS:
+        return name
+    return 'Q("{}")'.format(name.replace('"', '\\"'))
+
 
 def _fit(
     frame: pd.DataFrame,
@@ -358,8 +379,8 @@ def _fit(
     group: str | None = None,
 ) -> _Fit:
     """Fit OLS, or a random-intercept mixed model when `group` is given."""
-    formula = f"{response} ~ " + " + ".join(fixed_effects)
-    rhs = " + ".join(fixed_effects)
+    formula = f"{_term(response)} ~ " + " + ".join(_term(effect) for effect in fixed_effects)
+    rhs = " + ".join(_term(effect) for effect in fixed_effects)
     try:
         if group:
             result = smf.mixedlm(formula, frame, groups=frame[group]).fit(
@@ -473,14 +494,17 @@ def _order_terms(params: pd.Index, fixed_effects: list[str]) -> list[str]:
     """Present coefficients in the order the caller asked for, not the design's.
 
     statsmodels orders design columns itself, which puts categorical dummy terms
-    ahead of numeric ones. An agent reading the result should see `dose` where it
-    asked for `dose`. Anything unmatched is appended so nothing is dropped.
+    ahead of numeric ones. An agent reading the result should see `nitrogen` where it
+    asked for `nitrogen`. Anything unmatched is appended so nothing is dropped.
     """
     ordered = [name for name in params if name == "Intercept"]
     for effect in fixed_effects:
-        prefix = f"{effect}[T."
-        ordered += [name for name in params if name == effect or name.startswith(prefix)]
-    return ordered + [name for name in params if name not in ordered]
+        # `_term` is the identity for ordinary names; dedupe so no term lands twice.
+        for base in dict.fromkeys((effect, _term(effect))):
+            prefix = f"{base}[T."
+            ordered += [name for name in params if name == base or name.startswith(prefix)]
+    unique = list(dict.fromkeys(ordered))
+    return unique + [name for name in params if name not in unique]
 
 
 def describe_dataset() -> DatasetDescription:
@@ -504,23 +528,23 @@ def describe_dataset() -> DatasetDescription:
 def fit_mixed_model(
     response: str,
     fixed_effects: list[str],
-    group: str = "batch",
+    group: str = "block",
 ) -> MixedModelResult:
     """Fit a linear mixed model with a random intercept for `group`.
 
     Use this when repeated measurements are nested in a higher-level unit, e.g.
-    assay readings replicated within pilot batches. `response` must be numeric,
+    subplots grouped within the same field block. `response` must be numeric,
     `fixed_effects` may mix categorical factors and numeric covariates, and
     `group` is the column defining the random-effect groups (a random intercept
     per level). Returns fixed-effect estimates with 95% confidence intervals,
     the between-group and residual variances, and the ICC.
 
     Prefer this over plain OLS whenever observations repeat within `group`: it
-    separates batch-to-batch variability from the effect you actually care about.
+    separates block-to-block variability from the effect you actually care about.
     """
     frame = _checked(response, *fixed_effects, group)
     if not fixed_effects:
-        raise ToolError("Provide at least one fixed effect, e.g. ['formulation', 'dose'].")
+        raise ToolError("Provide at least one fixed effect, e.g. ['variety', 'nitrogen'].")
 
     fit = _fit(frame, response, fixed_effects, group)
     result = fit.result
@@ -573,12 +597,12 @@ def fit_mixed_model(
 def anova_effect(response: str, factor: str) -> AnovaResult:
     """Test whether `factor` shifts the mean of `response`, with effect size.
 
-    Use for a one-factor comparison across levels (formulation, dose band,
-    operator). Reports the F-test p-value, omega-squared (the share of variance
+    Use for a one-factor comparison across levels (variety, nitrogen rate,
+    block). Reports the F-test p-value, omega-squared (the share of variance
     attributable to `factor`, corrected for sample size), partial eta-squared,
     and Levene's test for equal variances across levels. Pair it with
     marginal_means for the per-level estimates, or fit_mixed_model when
-    replicates are nested within batches.
+    replicates are nested within blocks.
     """
     frame = _checked(response, factor)
 
@@ -625,7 +649,7 @@ def marginal_means(
     after anova_effect, which tells you a factor matters but not by how much.
 
     `group` fits a random intercept (as in fit_mixed_model) when rows repeat
-    within a unit such as a batch. `pairwise=True` adds level-vs-level
+    within a unit such as a block. `pairwise=True` adds level-vs-level
     differences with a multiplicity adjustment; `adjust` accepts 'tukey' (a true
     Tukey correction for a one-factor design) or any method from
     statsmodels.stats.multitest, e.g. 'holm', 'bonferroni', 'fdr_bh'.
@@ -633,7 +657,7 @@ def marginal_means(
     covariates = covariates or []
     fixed_effects = [*factors, *covariates]
     if not factors:
-        raise ToolError("Provide at least one factor, e.g. ['formulation'].")
+        raise ToolError("Provide at least one factor, e.g. ['variety'].")
     frame = _checked(response, *fixed_effects, *([group] if group else []))
     for factor in factors:
         if not pd.api.types.is_numeric_dtype(frame[factor]):
@@ -1015,7 +1039,7 @@ def power_analysis(
     standard deviation. Returns the power the current sample size achieves, the
     smallest effect it can detect at `target_power`, and the rows per level
     needed to detect the observed effect (or `target_effect`, in response units)
-    at that power. Use it to answer "should we run more pilot batches?".
+    at that power. Use it to answer "should we run more blocks?".
     """
     frame = _checked(response, factor)
 
@@ -1099,7 +1123,7 @@ def dose_response(
     tolerates a zero dose. `model='quadratic'` fits a parabola and reports the
     peak, for the case where the response turns over within the tested range.
     With `by` the fit repeats per level of that factor, e.g. one curve per
-    formulation. Returns parameter estimates, EC50 or peak dose with a
+    variety. Returns parameter estimates, EC50 or peak dose with a
     confidence interval, R-squared, AIC and the predicted curve.
     """
     frame = _checked(response, dose, *([by] if by else []))

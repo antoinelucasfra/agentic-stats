@@ -7,7 +7,7 @@ and no network. `ask()` wires it to a real MCP session and a chat endpoint.
 Ollama is the default, but vLLM, llama.cpp server, LM Studio, Groq and OpenAI
 all speak the same request shape, so one backend covers local and hosted models:
 
-    uv run agentic-stats-agent "Does formulation matter once batch is accounted for?"
+    uv run agentic-stats-agent "Does variety matter once block is accounted for?"
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ import os
 import sys
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import httpx
 
@@ -119,7 +120,12 @@ async def ask(
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
 
-    params = StdioServerParameters(command=sys.executable, args=["-m", "agentic_stats.mcp_server"])
+    # cwd: `mcp_server` is a top-level module here, so it must be importable.
+    params = StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "mcp_server"],
+        cwd=str(Path(__file__).resolve().parent),
+    )
 
     async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
         await session.initialize()
@@ -145,10 +151,10 @@ async def ask(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Ask a question about the DOE dataset")
+    parser = argparse.ArgumentParser(description="Ask a question about the oats trial")
     parser.add_argument(
         "question",
-        help="e.g. 'Does formulation matter once batch is accounted for?'",
+        help="e.g. 'Does variety matter once block is accounted for?'",
     )
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)

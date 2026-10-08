@@ -5,29 +5,31 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from agentic_stats import registry, views
+import registry
+import views
+from utils import formatting
 
 # One call per tool, with the same arguments the Overview cards use.
 CASES = [
     ("describe_dataset", {}, "Rows"),
     (
         "fit_mixed_model",
-        {"response": "assay_signal", "fixed_effects": ["formulation", "dose"]},
+        {"response": "grain", "fixed_effects": ["variety", "nitrogen"]},
         "ICC",
     ),
-    ("anova_effect", {"response": "assay_signal", "factor": "formulation"}, "Omega squared"),
+    ("anova_effect", {"response": "grain", "factor": "nitrogen"}, "Omega squared"),
     (
         "marginal_means",
-        {"response": "assay_signal", "factors": ["formulation"], "covariates": ["dose"]},
+        {"response": "grain", "factors": ["variety"], "covariates": ["nitrogen"]},
         "Adjustment",
     ),
     (
         "check_assumptions",
-        {"response": "assay_signal", "fixed_effects": ["formulation", "dose"]},
+        {"response": "grain", "fixed_effects": ["variety", "nitrogen"]},
         "Excess kurtosis",
     ),
-    ("power_analysis", {"response": "assay_signal", "factor": "formulation"}, "Power achieved"),
-    ("dose_response", {"response": "assay_signal", "dose": "dose", "model": "quadratic"}, "Peak"),
+    ("power_analysis", {"response": "grain", "factor": "nitrogen"}, "Power achieved"),
+    ("dose_response", {"response": "grain", "dose": "nitrogen", "model": "4pl"}, "EC50"),
 ]
 
 
@@ -66,7 +68,7 @@ def test_card_view_drops_tables_but_keeps_the_chart() -> None:
     assert "<table" not in card
     assert "Rows" in card
 
-    result = run("anova_effect", {"response": "assay_signal", "factor": "formulation"})
+    result = run("anova_effect", {"response": "grain", "factor": "nitrogen"})
     card = "".join(str(tag) for tag in views.card_view("anova_effect", result))
     assert "<img" in card
 
@@ -104,7 +106,7 @@ def test_unknown_tool_falls_back_to_json() -> None:
     [(None, "n/a"), (0.5, "0.5000"), (0.0004, "4.00e-04"), (float("nan"), "n/a")],
 )
 def test_number_formatting(value: float | None, expected: str) -> None:
-    assert views.fmt(value) == expected
+    assert formatting.fmt(value) == expected
 
 
 @pytest.mark.parametrize(
@@ -112,4 +114,4 @@ def test_number_formatting(value: float | None, expected: str) -> None:
     [(None, "p = n/a"), (0.0004, "p < 0.001"), (0.0512, "p = 0.051")],
 )
 def test_p_value_formatting(value: float | None, expected: str) -> None:
-    assert views.fmt_p(value) == expected
+    assert formatting.fmt_p(value) == expected

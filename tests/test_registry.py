@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from pathlib import Path
 
 import pytest
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from agentic_stats import registry
+import registry
 
 
 def published_tools():
@@ -21,7 +22,9 @@ def published_tools():
 
     async def run():
         params = StdioServerParameters(
-            command=sys.executable, args=["-m", "agentic_stats.mcp_server"]
+            command=sys.executable,
+            args=["-m", "mcp_server"],
+            cwd=str(Path(__file__).resolve().parents[1]),
         )
         async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
             await session.initialize()

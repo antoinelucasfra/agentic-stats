@@ -10,13 +10,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from agentic_stats.stats_tools import DatasetDescription, ToolError
+from stats_tools import DatasetDescription, ToolError
 
 FieldKind = Literal["string", "number", "integer", "boolean", "array", "enum"]
 
 _OMIT = object()
 
-DEFAULTS = {"response": "assay_signal", "factor": "formulation", "group": "batch", "dose": "dose"}
+DEFAULTS = {"response": "grain", "factor": "variety", "group": "block", "dose": "nitrogen"}
 
 
 @dataclass(frozen=True)
@@ -75,7 +75,7 @@ def suggestion(name: str, description: DatasetDescription) -> str:
     """A demo value for a familiar argument name, from the dataset's own columns."""
     numeric = description.numeric
     factors = description.factors
-    response = numeric[0] if numeric else DEFAULTS["response"]
+    response = DEFAULTS["response"] if DEFAULTS["response"] in numeric else _first(numeric, "")
     factor = DEFAULTS["factor"] if DEFAULTS["factor"] in factors else _first(factors, "batch")
     if name == "response":
         return response

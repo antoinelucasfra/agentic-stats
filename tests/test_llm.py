@@ -5,7 +5,8 @@ from __future__ import annotations
 import inspect
 import json
 
-from agentic_stats import llm, registry
+import llm
+import registry
 
 DUMMY = {"model": "dummy", "base_url": "http://127.0.0.1:1/v1"}
 
@@ -26,10 +27,10 @@ def test_build_client_registers_every_tool():
 def test_tool_results_reach_the_model_as_json():
     client = llm.build_client(**DUMMY)
 
-    result = client._tools["anova_effect"].func(response="assay_signal", factor="formulation")
+    result = client._tools["anova_effect"].func(response="grain", factor="nitrogen")
     payload = json.loads(result.get_model_value())
 
-    assert payload["factor"] == "formulation"
+    assert payload["factor"] == "nitrogen"
     assert payload["p_value"] < 0.001
 
 
@@ -37,7 +38,7 @@ def test_tool_errors_carry_the_actionable_message():
     client = llm.build_client(**DUMMY)
 
     try:
-        client._tools["anova_effect"].func(response="assay_signal", factor="formulation_id")
+        client._tools["anova_effect"].func(response="grain", factor="nitrogen_id")
     except Exception as exc:
         assert "Available columns" in str(exc)
     else:  # pragma: no cover - the tool must reject an unknown column

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from agentic_stats import charts
+import charts
 
 
 def bands() -> pd.DataFrame:

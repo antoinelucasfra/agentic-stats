@@ -10,7 +10,7 @@ import asyncio
 
 import pytest
 
-from agentic_stats.agent import Step, run_tool_loop
+from agent import Step, run_tool_loop
 
 TOOLS = [{"name": "describe_dataset", "description": "profile", "parameters": {}}]
 
@@ -24,7 +24,7 @@ def tool_call(name: str, **arguments):
 
 
 def test_loop_calls_tool_then_returns_answer():
-    replies = [tool_call("describe_dataset"), {"content": "B is the strongest formulation."}]
+    replies = [tool_call("describe_dataset"), {"content": "Marvellous is the strongest variety."}]
     calls: list[tuple[str, dict]] = []
 
     async def chat(messages, tools):
@@ -35,10 +35,10 @@ def test_loop_calls_tool_then_returns_answer():
         calls.append((name, arguments))
         return '{"n_rows": 576}'
 
-    answer, trace = asyncio.run(run_tool_loop("Which formulation wins?", TOOLS, chat, call_tool))
+    answer, trace = asyncio.run(run_tool_loop("Which variety wins?", TOOLS, chat, call_tool))
 
     assert calls == [("describe_dataset", {})]
-    assert answer == "B is the strongest formulation."
+    assert answer == "Marvellous is the strongest variety."
     assert len(trace) == 2
     assert trace[0].tool_results == ['{"n_rows": 576}']
 
@@ -46,7 +46,7 @@ def test_loop_calls_tool_then_returns_answer():
 def test_tool_failure_is_fed_back_to_the_model_instead_of_raising():
     replies = [
         tool_call("fit_mixed_model", response="nope"),
-        {"content": "That column does not exist; assay_signal does."},
+        {"content": "That column does not exist; grain does."},
     ]
     seen: list[str] = []
 
