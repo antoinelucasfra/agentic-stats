@@ -1,5 +1,5 @@
 services:
-  api:
+  app:
     build: .
     image: agentic-stats:latest
     ports:
@@ -7,3 +7,8 @@ services:
     environment:
       # Override to analyse another CSV with the same columns.
       AGENTIC_STATS_DATA: /app/data/doe_experiment.csv
+      # The Agent tab needs an OpenAI-compatible endpoint. Ollama on the host is
+      # the default; point these at a reachable one for a container.
+      # AGENTIC_STATS_LLM_BASE_URL: http://host.docker.internal:11434/v1
+      # AGENTIC_STATS_LLM_MODEL: qwen2.5:7b
+      # AGENTIC_STATS_LLM_API_KEY: ""

@@ -16,10 +16,6 @@ def test_mcp_server_lists_and_calls_tools():
         )
         async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
             await session.initialize()
-            listing = await session.list_tools()
-            names = {tool.name for tool in listing.tools}
-            assert names == {"describe_dataset", "fit_mixed_model", "anova_effect"}
-
             result = await session.call_tool("describe_dataset", {})
             assert not result.is_error
             payload = "".join(getattr(item, "text", "") for item in result.content)

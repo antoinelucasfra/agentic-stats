@@ -1,23 +1,36 @@
 [project]
 name = "agentic-stats"
 version = "0.1.0"
-description = "MCP server + FastAPI app exposing statistical analysis of an R&D design-of-experiments dataset to LLM agents"
+description = "MCP server and Shiny app exposing statistical analysis of an R&D design-of-experiments dataset to LLM agents"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
-    "fastapi>=0.115",
-    "mcp>=1.2",
+    "numpy>=1.26",
     "pandas>=2.2",
+    "patsy>=0.5",
     "pydantic>=2.9",
+    "scipy>=1.11",
     "statsmodels>=0.14",
-    "uvicorn[standard]>=0.32",
+]
+
+[project.optional-dependencies]
+# The statistics core needs no web server; each transport lives in an extra so
+# the MCP server and the CLI do not drag Shiny in.
+# Floor is 2.2, not 1.2: `mcp.server.mcpserver.MCPServer` does not exist in 1.x.
+mcp = ["mcp>=2.2"]
+agent = ["httpx>=0.27"]
+# The Shiny UI and the chat model it talks to. `shiny` brings shinychat in.
+app = [
+    "chatlas>=0.11",
+    "plotnine>=0.13",
+    "shiny>=1.0",
 ]
 
 [project.scripts]
-agentic-stats-api = "agentic_stats.api:main"
 agentic-stats-mcp = "agentic_stats.mcp_server:main"
 agentic-stats-agent = "agentic_stats.agent:main"
+agentic-stats-app = "agentic_stats.app:main"
 
 [dependency-groups]
 dev = ["httpx>=0.27", "pytest>=8.3", "ruff>=0.8"]
@@ -28,6 +41,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agentic_stats"]
+
+[tool.hatch.build.targets.sdist]
+exclude = ["dist"]
 
 [tool.ruff]
 line-length = 100

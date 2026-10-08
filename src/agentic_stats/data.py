@@ -20,7 +20,23 @@ DOSE_SLOPE = 0.22
 BATCH_SD = 2.0
 RESIDUAL_SD = 1.5
 
-DATA_PATH = Path(__file__).resolve().parents[2] / "data" / "doe_experiment.csv"
+_PACKAGE_DATA = Path(__file__).resolve().parent / "data" / "doe_experiment.csv"
+_REPO_DATA = Path(__file__).resolve().parents[2] / "data" / "doe_experiment.csv"
+
+
+def default_path() -> Path:
+    """First dataset that exists: bundled, repo root, then the working directory.
+
+    Falls back to the repo path so a missing dataset produces an error naming
+    the canonical location rather than a bare FileNotFoundError.
+    """
+    for candidate in (_PACKAGE_DATA, _REPO_DATA, Path.cwd() / "data" / "doe_experiment.csv"):
+        if candidate.exists():
+            return candidate
+    return _REPO_DATA
+
+
+DATA_PATH = default_path()
 
 
 def generate_doe(
@@ -64,8 +80,9 @@ def generate_doe(
     return pd.DataFrame(rows)
 
 
-def write_doe(path: Path = DATA_PATH, seed: int = SEED) -> Path:
+def write_doe(path: Path | None = None, seed: int = SEED) -> Path:
     """Write the dataset to `path` as CSV and return the path."""
+    path = path or DATA_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     generate_doe(seed=seed).to_csv(path, index=False)
     return path

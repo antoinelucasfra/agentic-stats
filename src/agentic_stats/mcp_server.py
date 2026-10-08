@@ -1,7 +1,8 @@
 """MCP server: the statistical tools, exposed to any MCP-capable agent.
 
 Transport is stdio by default, which is what editors and agent harnesses spawn.
-Run it directly to inspect the tool surface:
+The tool surface comes from `registry.TOOLS`, so signatures and docstrings are
+declared once, on the functions in `stats_tools`. Run it directly to inspect it:
 
     uv run agentic-stats-mcp
 """
@@ -10,7 +11,7 @@ from __future__ import annotations
 
 from mcp.server.mcpserver import MCPServer
 
-from agentic_stats import stats_tools
+from agentic_stats import registry
 
 INSTRUCTIONS = """
 Statistical analysis of an R&D design-of-experiments dataset (formulation x dose x
@@ -28,32 +29,8 @@ Call describe_dataset() first rather than guessing column names.
 
 server = MCPServer(name="agentic-stats", instructions=INSTRUCTIONS)
 
-
-@server.tool()
-def describe_dataset() -> stats_tools.DatasetDescription:
-    """Profile the experiment dataset: columns, types, missing values, ranges."""
-    return stats_tools.describe_dataset()
-
-
-@server.tool()
-def fit_mixed_model(
-    response: str,
-    fixed_effects: list[str],
-    group: str = "batch",
-) -> stats_tools.MixedModelResult:
-    """Fit a linear mixed model with a random intercept per group level.
-
-    Use when observations repeat within a higher-level unit (e.g. assay readings
-    within pilot batches). Returns fixed-effect estimates with 95% CIs and the
-    between-group / residual variances.
-    """
-    return stats_tools.fit_mixed_model(response, fixed_effects, group)
-
-
-@server.tool()
-def anova_effect(response: str, factor: str) -> stats_tools.AnovaResult:
-    """Test whether a factor shifts the mean of a numeric response, with omega-squared."""
-    return stats_tools.anova_effect(response, factor)
+for _tool in registry.TOOLS:
+    server.add_tool(_tool.handler, name=_tool.name, description=_tool.description)
 
 
 def main() -> None:

@@ -10,15 +10,20 @@ RUN pip install --no-cache-dir uv
 
 WORKDIR /app
 
-COPY pyproject.toml README.md ./
-RUN uv venv /opt/venv && uv pip install --python /opt/venv .
-
+# `src/` has to be present before the install: hatchling builds a wheel from
+# it, and a wheel built without it installs no modules at all.
+COPY pyproject.toml uv.lock README.md app.py ./
 COPY src/ ./src/
 COPY data/ ./data/
+# `--frozen` keeps the image on the same versions the tests and CI used.
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+RUN uv sync --frozen --no-dev --extra app
 
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s \
-    CMD python -c "import httpx; httpx.get('http://127.0.0.1:8000/health').raise_for_status()"
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/')"
 
-CMD ["uvicorn", "agentic_stats.api:app", "--host", "0.0.0.0", "--port", "8000"]
+# `--reload` is off, and `shiny run` needs the file path rather than the
+# console script, which binds loopback by default.
+CMD ["shiny", "run", "--host", "0.0.0.0", "--port", "8000", "app.py"]
