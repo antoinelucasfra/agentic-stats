@@ -147,13 +147,17 @@ Connect Cloud installs from `requirements.txt` and reads nothing else, and that 
 generated from `uv.lock`:
 
 ```bash
-uv export --format requirements-txt --no-hashes --no-header --extra app -o requirements.txt
+uv export --no-dev --format requirements-txt --no-hashes --no-header --extra app -o requirements.txt
 ```
+
+`--no-dev` keeps the dev group out, so Connect Cloud does not install pytest and ruff.
 
 CI regenerates it and diffs it against the committed copy, so a dependency change that
 was not exported fails the build. The first line is `-e .`, which installs this package
 from the repository and is what makes the `src/` layout importable in Connect Cloud's
-environment.
+environment. That line has to stay editable: the dataset is read from `data/` relative
+to the checkout, and a non-editable install of the same file fails at import with
+`ToolError: Dataset not found at .../site-packages/data/doe_experiment.csv`.
 
 To deploy: **Publish** in Connect Cloud, framework **Shiny for Python**, the repository
 and branch, primary file **app.py**, Python **3.12**. Add the Agent tab's endpoint as

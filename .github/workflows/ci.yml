@@ -26,7 +26,7 @@ jobs:
       # Connect Cloud installs Python packages from requirements.txt, not from
       # uv.lock, so the two files must not drift. Frozen: a stale lock fails here
       # rather than being silently re-resolved.
-      - run: uv export --frozen --format requirements-txt --no-hashes --no-header --extra app | diff - requirements.txt
+      - run: uv export --frozen --no-dev --format requirements-txt --no-hashes --no-header --extra app | diff - requirements.txt
       # The deploy path: Connect Cloud pip-installs this exact file on Linux,
       # which the uv sync above does not exercise.
       - run: |
