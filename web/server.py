@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from shiny import Inputs, Outputs, Session, reactive, ui
 
-from modules.agent import agent_server
-from modules.overview import overview_server
-from modules.playground import playground_server
 from utils.config import AGENT_ID, NAV_ID, OVERVIEW_ID, PLAYGROUND_ID
+from web.panels.agent import agent_server
+from web.panels.overview import overview_server
+from web.panels.playground import playground_server
 
 
 def server(input: Inputs, output: Outputs, session: Session) -> None:

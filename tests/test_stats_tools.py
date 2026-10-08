@@ -10,7 +10,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-import stats_tools
+from stats import stats_tools
 
 
 @pytest.fixture(scope="module")

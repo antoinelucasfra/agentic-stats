@@ -10,7 +10,7 @@ import asyncio
 
 import pytest
 
-from agent import Step, run_tool_loop
+from transports.agent import Step, run_tool_loop
 
 TOOLS = [{"name": "describe_dataset", "description": "profile", "parameters": {}}]
 

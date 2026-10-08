@@ -11,9 +11,8 @@ from typing import Any
 
 from shiny import Inputs, Outputs, Session, module, reactive, render, ui
 
-import registry
-import views
-from stats_tools import DatasetDescription
+from stats import registry, views
+from stats.stats_tools import DatasetDescription
 from utils.config import CARDS
 
 # Computed once at import: all seven tools together cost well under a second.

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from shiny import module, ui
 
-import llm
+from transports import llm
 
 DEFAULT_MODEL, DEFAULT_BASE_URL, DEFAULT_API_KEY = llm.settings()
 

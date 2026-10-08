@@ -9,12 +9,9 @@ import pandas as pd
 from pydantic import ValidationError
 from shiny import Inputs, Outputs, Session, module, reactive, render, ui
 
-import forms
-import registry
-import stats_tools
-import views
-from modules.playground.helpers import field_input, read_uploaded, upload_problem
-from stats_tools import DatasetDescription, ToolError
+from stats import forms, registry, stats_tools, views
+from stats.stats_tools import DatasetDescription, ToolError
+from web.panels.playground.helpers import field_input, read_uploaded, upload_problem
 
 
 @module.server

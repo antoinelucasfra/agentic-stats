@@ -14,8 +14,8 @@ import os
 
 from shiny import App, run_app
 
-from app_ui import app_ui
-from server import server
+from web.app_ui import app_ui
+from web.server import server
 
 app = App(app_ui, server)
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from mcp.server.mcpserver import MCPServer
 
-import registry
+from stats import registry
 
 INSTRUCTIONS = """
 Statistical analysis of a real agronomy split-plot trial: three oat varieties in the

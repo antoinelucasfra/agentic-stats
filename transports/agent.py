@@ -123,7 +123,7 @@ async def ask(
     # cwd: `mcp_server` is a top-level module here, so it must be importable.
     params = StdioServerParameters(
         command=sys.executable,
-        args=["-m", "mcp_server"],
+        args=["-m", "transports.mcp_server"],
         cwd=str(Path(__file__).resolve().parent),
     )
 

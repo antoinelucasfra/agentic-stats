@@ -17,15 +17,15 @@ confidence intervals: no code execution and no shell in the loop.
 - **Tools, not a code interpreter.** `fit_mixed_model(response, fixed_effects, group)`
   is a bounded, typed operation. The agent cannot write arbitrary code, cannot touch
   the filesystem, and gets a validation error it can act on instead of a stack trace.
-- **One registry, three transports.** `registry.py` derives each tool's JSON Schema
+- **One registry, three transports.** `stats/registry.py` derives each tool's JSON Schema
   from the function's signature and docstring. The MCP server, the CLI agent and the
   Shiny app all read that one list, so they cannot drift apart.
 - **Statistics that survives review.** Mixed models, marginal means, assumption checks,
   power, and dose response, computed by `statsmodels` and `scipy`, not reimplemented.
-- **The app is the package.** The Shiny app imports `stats_tools` directly, so the
+- **One implementation.** The Shiny app imports `stats.stats_tools` directly, so the
   numbers on the page are the numbers the tests cover. There is no second
   implementation and no statistics in JavaScript.
-- **Real data, fetched not committed.** `data.py` pulls the trial from Rdatasets
+- **Real data, fetched not committed.** `utils/data.py` pulls the trial from Rdatasets
   over HTTPS and writes a parquet cache with `duckdb`; the repository carries no
   dataset. The Agent tab is the only part that needs an endpoint.
 
@@ -33,29 +33,31 @@ confidence intervals: no code execution and no shell in the loop.
 
 ```
                         ┌──────────────────────────────┐
-                        │  stats_tools.py              │
+                        │  stats/stats_tools.py        │
                         │  pure functions              │
                         └──────────────┬───────────────┘
                                        │
                         ┌──────────────▼───────────────┐
-                        │  registry.py                 │
+                        │  stats/registry.py           │
                         │  name · JSON Schema · output │
                         └───┬──────────┬───────────┬───┘
                             │          │           │
               ┌─────────────▼──┐  ┌────▼──────┐  ┌─▼──────────────────────┐
-              │ mcp_server.py  │  │ agent.py  │  │ app.py (Shiny)         │
-              │ stdio, 7 tools │  │ CLI loop  │  │ modules/overview       │
-              └────────────────┘  └───────────┘  │ modules/playground     │
-                                                 │ modules/agent          │
+              │ transports/    │  │ transports│  │ app.py                 │
+              │ mcp_server.py  │  │ /agent.py │  │ web/app_ui.py          │
+              │ stdio, 7 tools │  │ CLI loop  │  │ web/panels/overview    │
+              └────────────────┘  └───────────┘  │ web/panels/playground  │
+                                                 │ web/panels/agent       │
                                                  └────────────────────────┘
 ```
 
-`app.py` wires `app_ui.py` and `server.py` into an `App`. Each panel is a Shiny
-module under `modules/`, so its inputs are namespaced (`playground-tool`) and two
-panels cannot collide. The only cross-panel state is a `pending` value created in
-`server.py`: the Overview writes a card's tool and arguments into it, the
-Playground selects that tool, and `server.py` switches the navbar, because a module
-cannot address another module's inputs and the navbar belongs to the root.
+`app.py` does one thing: `App(app_ui, server)`. `web/app_ui.py` builds the navbar and
+`web/server.py` is the root server. Each panel is a Shiny module under
+`web/panels/`, so its inputs are namespaced (`playground-tool`) and two panels cannot
+collide. The only cross-panel state is a `pending` value created in `web/server.py`:
+the Overview writes a card's tool and arguments into it, the Playground selects that
+tool, and `web/server.py` switches the navbar, because a module cannot address
+another module's inputs and the navbar belongs to the root.
 
 ## What the tools answer
 
@@ -150,8 +152,8 @@ Ask a question with any OpenAI-compatible endpoint, Ollama by default:
 
 ```bash
 ollama pull qwen2.5:7b
-uv run python agent.py "Which oat variety should we scale up, and why?"
-uv run python mcp_server.py            # the same tools over stdio, for any MCP client
+uv run python -m transports.agent "Which oat variety should we scale up, and why?"
+uv run python -m transports.mcp_server   # the same tools over stdio, for any MCP client
 ```
 
 ## The Shiny app
@@ -178,7 +180,7 @@ Three panels, one page:
 
 Charts are plotnine figures encoded as inline PNGs, so tables and charts come from the
 same result objects on every surface. An uploaded table is scoped to its session through
-a `contextvars` override in `stats_tools.use_frame`, so one reader's file never
+a `contextvars` override in `stats.stats_tools.use_frame`, so one reader's file never
 changes another reader's numbers.
 
 ## Hosting on Posit Connect Cloud
@@ -198,7 +200,7 @@ uv export --no-dev --format requirements-txt --no-hashes --no-header --extra app
 CI regenerates it and diffs it against the committed copy, so a dependency change that
 was not exported fails the build. The file lists dependencies only: there is no `.`
 line, because the app is not a package and Connect Cloud runs `app.py` from the
-checkout, where `modules/` and `utils/` sit next to it.
+checkout, where `web/`, `stats/`, `transports/` and `utils/` sit next to it.
 
 The dataset is not shipped. On the platform the app downloads the CSV from Rdatasets
 and writes the parquet cache on first use, so the deploy needs outbound HTTPS and a
@@ -241,30 +243,37 @@ deploy takes.
 ## Layout
 
 ```
-app.py            entry point: App(app_ui, server), and `python app.py`
-app_ui.py         the navbar, assembling one module per panel
-server.py         the root server, and the only shared state between panels
+app.py                 entry point: App(app_ui, server), and `python app.py`
 
-modules/
-  overview/       ui.py, server.py: the six cards, computed at import
-  playground/     ui.py, server.py, helpers.py: tool picker, form, upload
-  agent/          ui.py, server.py: chatlas client with the tools attached
+web/                   everything Shiny
+  app_ui.py            the navbar, assembling one module per panel
+  server.py            the root server, and the only shared state between panels
+  panels/
+    overview/          ui.py, server.py: the six cards, computed at import
+    playground/        ui.py, server.py, helpers.py: tool picker, form, upload
+    agent/             ui.py, server.py: chatlas client with the tools attached
+
+stats/                 the statistics, transport-agnostic
+  stats_tools.py       pure statistical functions + pydantic result models
+  registry.py          derives each tool's schema from its function signature
+  views.py             one renderer per tool: metrics, charts, tables, notes
+  charts.py            plotnine figures, encoded as inline PNGs
+  forms.py             JSON Schema to form fields, and field values back to arguments
+
+transports/            one module per way of calling the tools
+  mcp_server.py        MCPServer over stdio, built from the registry
+  agent.py             CLI tool-calling loop + OpenAI-compatible backend
+  llm.py               chatlas client with the registry tools attached
 
 utils/
-  config.py       constants, paths, the card definitions, panel ids
-  data.py         fetch + parquet cache for the oats split-plot trial
-  formatting.py   number and p-value formatting
+  config.py            constants, paths, the card definitions, panel ids
+  data.py              fetch + parquet cache for the oats split-plot trial
+  formatting.py        number and p-value formatting
 
-stats_tools.py    pure statistical functions + pydantic result models
-registry.py       derives each tool's schema from its function signature
-mcp_server.py     MCPServer over stdio, built from the registry
-agent.py          CLI tool-calling loop + OpenAI-compatible backend
-views.py          one renderer per tool: metrics, charts, tables, notes
-charts.py         plotnine figures, encoded as inline PNGs
-forms.py          JSON Schema to form fields, and field values back to arguments
-llm.py            chatlas client with the registry tools attached
-tests/            tools, registry, MCP wiring, agent loop, app, views, forms
+tests/                 tools, registry, MCP wiring, agent loop, app, views, forms
 ```
+
+Only `app.py` sits at the root, because `shiny run app.py` needs it there.
 
 This is an application, not a distributable package: `app.py` runs from the
 checkout, uv manages the environment (`package = false`), and `requirements.txt`

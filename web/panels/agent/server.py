@@ -6,7 +6,7 @@ from typing import Any
 
 from shiny import Inputs, Outputs, Session, module, reactive, ui
 
-import llm
+from transports import llm
 
 
 @module.server

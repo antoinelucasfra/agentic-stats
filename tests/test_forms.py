@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-import forms
-import registry
-import stats_tools
+from stats import forms, registry, stats_tools
 
 
 def fields_for(tool: str) -> list[forms.Field]:

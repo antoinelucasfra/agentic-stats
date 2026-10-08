@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from stats_tools import DatasetDescription, ToolError
+from stats.stats_tools import DatasetDescription, ToolError
 
 FieldKind = Literal["string", "number", "integer", "boolean", "array", "enum"]
 

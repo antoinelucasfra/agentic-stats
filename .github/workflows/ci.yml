@@ -31,12 +31,12 @@ jobs:
       - run: uv export --frozen --no-dev --format requirements-txt --no-hashes --no-header --extra app | diff - requirements.txt
       # The deploy path: Connect Cloud pip-installs this exact file on Linux,
       # which the uv sync above does not exercise. This app is not a package, so
-      # `app.py` and `modules/` come from the checkout and the import runs from
-      # the repository root, as it does on the platform.
+      # `app.py`, `web/`, `stats/` and `utils/` come from the checkout, and the
+      # import runs from the repository root, as it does on the platform.
       - run: |
           uv venv /tmp/cc
           uv pip install --python /tmp/cc/bin/python -r requirements.txt
-          /tmp/cc/bin/python -c "import app, app_ui, server; print(type(app.app).__name__)"
+          /tmp/cc/bin/python -c "import app, web.app_ui, web.server; print(type(app.app).__name__)"
       # test_app.py drives the real server in memory: the generated Playground
       # form, a tool run, an upload and the error paths. test_registry.py checks
       # the MCP surface against the registry the app reads, so the two cannot drift.

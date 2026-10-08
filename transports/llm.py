@@ -14,7 +14,7 @@ from typing import Any
 import chatlas
 from chatlas import ContentToolResult
 
-import registry
+from stats import registry
 
 DEFAULT_BASE_URL = "http://127.0.0.1:11434/v1"
 DEFAULT_MODEL = "qwen2.5:7b"

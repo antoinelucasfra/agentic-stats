@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from shiny import ui
 
-from modules.agent import agent_ui
-from modules.overview import overview_ui
-from modules.playground import playground_ui
 from utils.config import AGENT_ID, NAV_ID, OVERVIEW_ID, PLAYGROUND_ID
+from web.panels.agent import agent_ui
+from web.panels.overview import overview_ui
+from web.panels.playground import playground_ui
 
 app_ui = ui.page_navbar(
     overview_ui(OVERVIEW_ID),

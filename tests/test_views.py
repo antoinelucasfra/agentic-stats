@@ -5,8 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-import registry
-import views
+from stats import registry, views
 from utils import formatting
 
 # One call per tool, with the same arguments the Overview cards use.

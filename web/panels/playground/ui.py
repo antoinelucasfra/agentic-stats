@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from shiny import module, ui
 
-import registry
+from stats import registry
 from utils.config import UPLOAD_SUFFIXES
 
 TOOL_CHOICES = {spec.name: spec.name for spec in registry.TOOLS}

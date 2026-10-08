@@ -15,8 +15,8 @@ from typing import Any, Literal
 import pandas as pd
 from shiny import ui
 
-import charts
-from stats_tools import (
+from stats import charts
+from stats.stats_tools import (
     AnovaResult,
     AssumptionChecks,
     DatasetDescription,

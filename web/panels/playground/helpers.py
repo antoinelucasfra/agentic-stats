@@ -8,8 +8,8 @@ from typing import Any
 import pandas as pd
 from shiny import ui
 
-import forms
-from stats_tools import DatasetDescription
+from stats import forms
+from stats.stats_tools import DatasetDescription
 from utils import data
 from utils.config import MAX_UPLOAD_BYTES, UPLOAD_SUFFIXES
 from utils.formatting import number

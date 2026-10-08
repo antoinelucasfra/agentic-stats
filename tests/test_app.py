@@ -10,8 +10,8 @@ import pandas as pd
 import pytest
 from shiny.testserver import test_server
 
-import stats_tools
 from app import app
+from stats import stats_tools
 from utils.config import CARDS
 
 TOOL = "playground-tool"

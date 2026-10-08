@@ -5,8 +5,8 @@ from __future__ import annotations
 import inspect
 import json
 
-import llm
-import registry
+from stats import registry
+from transports import llm
 
 DUMMY = {"model": "dummy", "base_url": "http://127.0.0.1:1/v1"}
 

@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import stats_tools
+from stats import stats_tools
 
 REAL_LEVEL_MEANS = {"golden rain": 104.5, "marvellous": 109.7917, "victory": 97.625}
 

@@ -14,7 +14,7 @@ def test_mcp_server_lists_and_calls_tools():
     async def run():
         params = StdioServerParameters(
             command=sys.executable,
-            args=["-m", "mcp_server"],
+            args=["-m", "transports.mcp_server"],
             cwd=str(Path(__file__).resolve().parents[1]),
         )
         async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
