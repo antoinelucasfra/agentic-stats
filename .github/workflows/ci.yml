@@ -27,6 +27,12 @@ jobs:
       # uv.lock, so the two files must not drift. Frozen: a stale lock fails here
       # rather than being silently re-resolved.
       - run: uv export --frozen --format requirements-txt --no-hashes --no-header --extra app | diff - requirements.txt
+      # The deploy path: Connect Cloud pip-installs this exact file on Linux,
+      # which the uv sync above does not exercise.
+      - run: |
+          uv venv /tmp/cc
+          uv pip install --python /tmp/cc/bin/python -r requirements.txt
+          cd /tmp && /tmp/cc/bin/python -c "from agentic_stats.app import app; print(type(app).__name__)"
       # test_app.py drives the real server in memory: the generated Playground
       # form, a tool run, a CSV upload and the error paths. test_registry.py
       # checks the MCP surface against the registry the app reads, so the two
