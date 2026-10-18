@@ -177,3 +177,19 @@ def test_upload_rejects_anything_but_csv_or_parquet(ts, tmp_path):
 
     html = rendered(ts.get_output(RESULT))
     assert str(stats_tools.describe_dataset().n_rows) in html
+
+
+def test_data_panel_lists_the_shipped_table(ts):
+    ts.set_inputs(**{"nav": "data"})
+    html = rendered(ts.get_output("data-tables_view"))
+
+    assert "primary" in html
+    assert "72" in html
+
+
+def test_data_panel_shows_role_guesses(ts):
+    ts.set_inputs(**{"nav": "data", "data-table_pick": "primary"})
+    html = rendered(ts.get_output("data-roles_view"))
+
+    assert "grain" in html
+    assert "Apply roles" in html

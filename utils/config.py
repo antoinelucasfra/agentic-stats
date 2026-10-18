@@ -27,10 +27,20 @@ SELECT = (
 # The response every card and every form falls back to.
 RESPONSE = "grain"
 
-# --- uploads ----------------------------------------------------------------
+# --- imports ----------------------------------------------------------------
 
 UPLOAD_SUFFIXES = (".csv", ".parquet")
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+
+# --- public table imports ----------------------------------------------------
+
+# A downloaded table is read into memory, so the caps below are the only thing
+# standing between a hostile or careless URL and the server's RAM. Aggregate
+# anything larger before importing it.
+MAX_IMPORT_ROWS = 500_000
+MAX_IMPORT_COLS = 100
+IMPORT_DIRNAME = "imports"
+CATALOG_INDEX_NAME = "rdatasets-index.csv"
 
 # --- panel and input ids ------------------------------------------------------
 
@@ -39,6 +49,7 @@ MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 # the sender writes it, the receiving module updates its own inputs.
 NAV_ID = "nav"
 OVERVIEW_ID = "overview"
+DATA_ID = "data"
 PLAYGROUND_ID = "playground"
 AGENT_ID = "agent"
 

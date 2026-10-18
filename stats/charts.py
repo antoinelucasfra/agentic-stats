@@ -91,14 +91,20 @@ def residual_plot(frame: pd.DataFrame) -> ggplot:
 
 def figure_to_img(plot: ggplot, alt: str) -> ui.Tag:
     """Encode a plotnine figure as an inline PNG, so it composes anywhere."""
+    return ui.img(src=figure_to_data_uri(plot), alt=alt, width="100%")
+
+
+def figure_to_data_uri(
+    plot: ggplot,
+    width: float = WIDTH_INCHES,
+    height: float = HEIGHT_INCHES,
+    dpi: int = DPI,
+) -> str:
+    """The same figure as a data URI, for results that carry their own image.
+
+    A stored result cannot hold a Shiny tag, so the `plot` tool stores this
+    string instead and the renderer puts it back into an `img`.
+    """
     buffer = BytesIO()
-    plot.save(
-        buffer,
-        format="png",
-        width=WIDTH_INCHES,
-        height=HEIGHT_INCHES,
-        dpi=DPI,
-        verbose=False,
-    )
-    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
-    return ui.img(src=f"data:image/png;base64,{encoded}", alt=alt, width="100%")
+    plot.save(buffer, format="png", width=width, height=height, dpi=dpi, verbose=False)
+    return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")

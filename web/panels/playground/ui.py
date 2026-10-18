@@ -4,27 +4,10 @@ from __future__ import annotations
 
 from shiny import module, ui
 
+from stats import registry
 from utils.config import UPLOAD_SUFFIXES
 
-TOOL_CHOICES = {
-    "Profile the data": {
-        "describe_dataset": "describe_dataset",
-        "correlate": "correlate",
-    },
-    "Compare levels": {
-        "anova_effect": "anova_effect",
-        "marginal_means": "marginal_means",
-    },
-    "Model with grouping": {
-        "fit_mixed_model": "fit_mixed_model",
-        "check_assumptions": "check_assumptions",
-    },
-    "Design size": {"power_analysis": "power_analysis"},
-    "Dose response": {
-        "dose_response": "dose_response",
-        "fit_curve_family": "fit_curve_family",
-    },
-}
+TOOL_CHOICES = registry.grouped()
 
 
 @module.ui
@@ -36,6 +19,7 @@ def playground_ui() -> ui.NavPanel:
                 ui.input_select("tool", "Tool", choices=TOOL_CHOICES),
                 ui.output_ui("tool_form"),
                 ui.input_action_button("run", "Run", class_="btn-primary"),
+                ui.download_button("download_report", "Download report"),
                 ui.hr(),
                 ui.input_file(
                     "csv",
@@ -43,8 +27,9 @@ def playground_ui() -> ui.NavPanel:
                     accept=list(UPLOAD_SUFFIXES),
                 ),
                 ui.tags.p(
-                    "Needs the same columns as the shipped dataset. Read on the server "
-                    "and never written to disk.",
+                    "The workflow tools run first: frame the question, then profile the "
+                    "table. Everything downstream refuses to run before those two. "
+                    "Uploads are read on the server and never written to disk.",
                     class_="text-muted small",
                 ),
                 width=380,

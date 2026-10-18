@@ -8,18 +8,19 @@ from types import SimpleNamespace
 
 import pytest
 
-from stats import registry
+from stats import registry, session, stats_tools
 from transports import llm
 
 DUMMY = {"model": "dummy", "base_url": "http://127.0.0.1:1/v1"}
 
 
-def test_build_client_registers_every_tool():
+def test_build_client_registers_every_agent_tool():
     client = llm.build_client(**DUMMY)
     registered = client._tools  # chatlas keeps the registry here
+    specs = registry.agent_tools()
 
-    assert set(registered) == {spec.name for spec in registry.TOOLS}
-    for spec in registry.TOOLS:
+    assert set(registered) == {spec.name for spec in specs}
+    for spec in specs:
         function = registered[spec.name].schema["function"]
         assert function["name"] == spec.name
         assert set(function["parameters"]["properties"]) == set(spec.input_model.model_fields)
@@ -29,23 +30,27 @@ def test_build_client_registers_every_tool():
 
 def test_tool_results_reach_the_model_as_json():
     client = llm.build_client(**DUMMY)
+    store = session.SessionStore.from_frame(stats_tools.load_dataset())
+    with session.use_session(store):
+        result = client._tools["frame_question"].func(question="Does variety matter?")
 
-    result = client._tools["anova_effect"].func(response="grain", factor="nitrogen")
     payload = json.loads(result.get_model_value())
 
-    assert payload["factor"] == "nitrogen"
-    assert payload["p_value"] < 0.001
+    assert payload["outcome"] == "grain"
+    assert payload["result_id"].startswith("a_")
 
 
 def test_tool_errors_carry_the_actionable_message():
     client = llm.build_client(**DUMMY)
+    store = session.SessionStore.from_frame(stats_tools.load_dataset())
 
     try:
-        client._tools["anova_effect"].func(response="grain", factor="nitrogen_id")
+        with session.use_session(store):
+            client._tools["frame_question"].func(question="Which variety wins?", outcome="nope")
     except Exception as exc:
         assert "Available columns" in str(exc)
     else:  # pragma: no cover - the tool must reject an unknown column
-        raise AssertionError("an unknown column should raise")
+        raise AssertionError("an unknown outcome should raise")
 
 
 def test_settings_default_and_environment(monkeypatch):
@@ -103,3 +108,34 @@ def test_trace_marks_errors():
 
     assert trace[0].is_error
     assert trace[0].summary.startswith("ERROR")
+
+
+def test_a_preset_without_a_model_asks_for_one():
+    """No model name is shipped for the providers whose names move fastest."""
+    with pytest.raises(ValueError, match="needs a model name"):
+        llm.resolve("anthropic")
+
+    assert llm.resolve("anthropic", "some-model", "", "k") == (
+        "some-model",
+        llm.ANTHROPIC_BASE_URL,
+        "k",
+    )
+
+
+def test_every_preset_points_at_an_openai_compatible_endpoint():
+    for preset in llm.PRESETS:
+        if preset.id == "custom":
+            continue
+        assert preset.base_url.startswith(("https://", "http://127.0.0.1:"))
+
+
+def test_the_prompt_sends_the_model_through_the_ledger():
+    assert "frame_question" in llm.SYSTEM_PROMPT
+    assert "analysis_status" in llm.SYSTEM_PROMPT
+    assert "cannot_say" in llm.SYSTEM_PROMPT
+    assert "agronomy" not in llm.SYSTEM_PROMPT
+
+
+def test_the_key_policy_says_where_the_key_goes():
+    assert "never logged" in llm.KEY_POLICY
+    assert "provider" in llm.KEY_POLICY

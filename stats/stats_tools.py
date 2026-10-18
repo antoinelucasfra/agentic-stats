@@ -13,7 +13,6 @@ import keyword
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
-from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -32,6 +31,8 @@ from statsmodels.stats.multitest import multipletests
 from statsmodels.stats.outliers_influence import OLSInfluence, variance_inflation_factor
 from statsmodels.stats.power import FTestAnovaPower
 
+from stats import session
+from stats.errors import ToolError
 from utils import config
 from utils import data as dataset
 
@@ -40,10 +41,6 @@ MAX_LEVELS = 50
 MAX_POINTS = 300
 MAX_BY_LEVELS = 12
 MAX_VIF_TERMS = 20
-
-
-class ToolError(ValueError):
-    """A user- or agent-facing error with an actionable message."""
 
 
 class ColumnSummary(BaseModel):
@@ -303,28 +300,60 @@ def dataset_path() -> Path:
 
 
 def load_dataset() -> pd.DataFrame:
-    """The active dataset: an uploaded frame in this context, else the CSV."""
+    """The active dataset: an uploaded frame in this session, else the CSV."""
     return _frame()
 
 
+def env_store() -> session.SessionStore:
+    """The environment dataset as a session store, with its source recorded.
+
+    `session.default_session` calls this on first use, so importing this module
+    still fetches nothing. The Shiny panels call it too, so every panel that
+    needs a starting store gets one with the same provenance.
+    """
+    path = dataset_path()
+    return session.SessionStore.from_frame(_load(str(path)), source=str(path))
+
+
+def _env_key() -> str:
+    """Identify the environment dataset, including its mtime.
+
+    Editing the file the env var points at reloads it, which is what the old
+    `lru_cache` keyed on mtime and size did.
+    """
+    path = dataset_path()
+    try:
+        stat = path.stat()
+    except OSError:
+        return str(path)
+    return f"{path}:{stat.st_mtime_ns}:{stat.st_size}"
+
+
+# How the session layer builds the environment dataset. Registering it here
+# keeps `stats.session` free of any knowledge of `utils.data` or the cache path.
+session.set_default_session(env_store, key=_env_key)
+
+
 def _frame() -> pd.DataFrame:
-    override = _ACTIVE.get()
-    return override if override is not None else _load(str(dataset_path()))
+    """The active session's primary table."""
+    return session.current_session().frame()
 
 
-# A per-call override, so the Shiny app can analyse an uploaded CSV without
-# touching the process-wide AGENTIC_STATS_DATA.
-_ACTIVE: ContextVar[pd.DataFrame | None] = ContextVar("agentic_stats_frame", default=None)
+def _source() -> str:
+    """Where the active frame came from, for provenance in a profile."""
+    store = session.current_session()
+    return store.table().source if store.tables else str(dataset_path())
 
 
 @contextmanager
 def use_frame(frame: pd.DataFrame) -> Iterator[None]:
-    """Analyse `frame` for the duration of the block, whatever the env says."""
-    token = _ACTIVE.set(frame)
-    try:
+    """Analyse `frame` for the duration of the block, whatever the env says.
+
+    The uploaded-CSV path from the Shiny app, kept as one table in a throwaway
+    session so no other reader's data or ledger is touched.
+    """
+    with session.use_session(session.SessionStore.from_frame(frame)):
         yield
-    finally:
-        _ACTIVE.reset(token)
 
 
 def _require(frame: pd.DataFrame, columns: list[str]) -> None:
@@ -563,7 +592,7 @@ def describe_dataset() -> DatasetDescription:
         "a non-significant p-value."
     )
     return DatasetDescription(
-        path=str(dataset_path()),
+        path=_source(),
         n_rows=len(frame),
         n_columns=len(frame.columns),
         columns=[_summary(frame, c) for c in frame.columns],

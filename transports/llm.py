@@ -22,6 +22,14 @@ DEFAULT_MODEL = "qwen2.5:7b"
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 
+# Every provider below publishes an OpenAI-compatible chat completions endpoint,
+# checked against its own documentation. The base paths are not uniform: Gemini
+# carries the version inside the compatibility prefix and the others do not.
+ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1"
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
+MISTRAL_BASE_URL = "https://api.mistral.ai/v1"
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
 
 @dataclass(frozen=True)
 class Preset:
@@ -48,21 +56,36 @@ PRESETS: tuple[Preset, ...] = (
     Preset("ollama-llama", "Ollama: llama3.1:8b", "llama3.1:8b", DEFAULT_BASE_URL, "none"),
     Preset("groq", "Groq (your key)", "openai/gpt-oss-20b", GROQ_BASE_URL, "own"),
     Preset("openai", "OpenAI (your key)", "gpt-4o-mini", OPENAI_BASE_URL, "own"),
+    # No model name is shipped for these four: the names change faster than this
+    # file, and a stale one fails with a message from the provider instead of
+    # from us. Type one, or read the list at <base_url>/models.
+    Preset("anthropic", "Anthropic (your key)", "", ANTHROPIC_BASE_URL, "own"),
+    Preset("gemini", "Google Gemini (your key)", "", GEMINI_BASE_URL, "own"),
+    Preset("mistral", "Mistral (your key)", "", MISTRAL_BASE_URL, "own"),
+    Preset("openrouter", "OpenRouter (your key)", "", OPENROUTER_BASE_URL, "own"),
     Preset("custom", "Custom endpoint", "", "", "own"),
 )
 
 SYSTEM_PROMPT = (
-    "You answer questions about an agronomy trial: oat varieties in the whole "
-    "plots, nitrogen rates in the subplots, replicated over blocks. Every number "
-    "you report must come from a tool call: profile the data with describe_dataset "
-    "first, then fit the model the question needs. Quote estimates with their "
-    "confidence intervals and name the tool that produced them. When a tool "
-    "returns an error, read the message and retry with corrected arguments. "
-    "Repeat a tool's notes verbatim when they warn you: an EC50 or peak outside "
-    "the tested dose range is an extrapolation, not a finding. A non-significant "
-    "p-value means the trial could not resolve the effect; check power_analysis "
-    "before saying two varieties are equal. A low achieved power means the "
-    "design is underpowered, not that there is no effect."
+    "You analyse a table the reader loaded, and you never compute a number yourself. "
+    "Every figure you report comes from a tool result, and you name the result id beside "
+    "it. Work in the order the ledger enforces: frame_question to state the estimand, "
+    "profile_table to learn the columns and the quality problems, then fit_model or "
+    "compare_groups, then sensitivity, then explain_result. Call analysis_status whenever "
+    "you are unsure what comes next, and follow its recommended_next. When a tool errors, "
+    "read the message and retry: it names the columns that exist. Repeat a tool's caveats "
+    "and cannot_say verbatim, because they are the limits of the answer. A wide interval "
+    "is not evidence of no difference, and a column recorded after the outcome is leakage, "
+    "not a predictor. Do not call a result causal unless the design stage permitted a "
+    "causal target. run_sql is for lookups and aggregates only: a claim about an effect "
+    "cites fit_model, compare_groups or sensitivity."
+)
+
+# The copy the Agent panel shows beside the key box. It has to be true.
+KEY_POLICY = (
+    "Your key is sent to this server, used for your session's requests, and held in "
+    "memory only: it is never written to disk and never logged. The values the model "
+    "reads from your table are sent to the provider you chose."
 )
 
 
@@ -102,7 +125,14 @@ def resolve(
                 "The demo preset needs AGENTIC_STATS_LLM_API_KEY set where the app "
                 "runs. Locally, pick an Ollama preset instead."
             )
-    return (model.strip() or preset.model, base_url.strip() or preset.base_url, key)
+    endpoint = base_url.strip() or preset.base_url
+    chosen = model.strip() or preset.model
+    if not chosen:
+        raise ValueError(
+            f"The {preset.label} preset needs a model name. Type one in the Model box, "
+            f"or read the list at {endpoint.rstrip('/')}/models."
+        )
+    return (chosen, endpoint, key)
 
 
 def _record_request(trace, pending, event) -> None:
@@ -166,7 +196,7 @@ def build_client(
         api_key=api_key or "not-needed",
         system_prompt=system_prompt,
     )
-    for spec in registry.TOOLS:
+    for spec in registry.agent_tools():
         # name= is required: with model=, chatlas names the tool after the model,
         # and registry builds those as "<tool>Request".
         client.register_tool(_as_tool(spec.handler), name=spec.name, model=spec.input_model)
