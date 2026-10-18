@@ -22,6 +22,7 @@ from stats import forms, registry, stats_tools, views, workflow
 from stats.report import html_report
 from stats.session import use_session
 from stats.stats_tools import DatasetDescription, ToolError
+from transports import extraction
 from web.panels.playground.helpers import field_input, read_uploaded, upload_problem
 
 
@@ -157,3 +158,49 @@ def playground_server(
         """The session as one self-contained file: tables, ledger, findings."""
         with use_session(store()):
             yield html_report(store())
+
+    # --- notes to table -------------------------------------------------------
+
+    @reactive.calc
+    @reactive.event(input.extract)
+    def extraction_outcome() -> Any:
+        """The notes as rows, or the exception to show; the house outcome shape."""
+        try:
+            columns = [name.strip() for name in input.notes_columns().split(",")]
+            return extraction.extract_columns(input.notes(), columns)
+        except Exception as exc:
+            return exc
+
+    @render.ui
+    def notes_result() -> Any:
+        frame = extraction_outcome()
+        if isinstance(frame, Exception):
+            return ui.div(str(frame) or type(frame).__name__, class_="alert alert-danger")
+        if frame.empty:
+            return ui.tags.p("No rows came back from the notes.", class_="text-muted")
+        coerced = frame.attrs.get("coerced") or []
+        note = (
+            ui.tags.p(
+                f"Numbers read as text were converted to numeric: {', '.join(coerced)}.",
+                class_="text-muted small",
+            )
+            if coerced
+            else None
+        )
+        table = views.table(
+            list(frame.columns),
+            frame.fillna("").values.tolist(),
+        )
+        parts: list[Any] = [table.tag]
+        if note is not None:
+            parts.insert(0, note)
+        return parts
+
+    @render.download_button(filename="extracted-notes.csv")
+    def download_notes_csv():
+        frame = extraction_outcome()
+        if isinstance(frame, Exception) or frame.empty:
+            ui.notification_show("Extract the notes before downloading the CSV.", type="error")
+            yield ""
+            return
+        yield frame.to_csv(index=False)
