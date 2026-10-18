@@ -9,6 +9,7 @@ browser.
 from __future__ import annotations
 
 import asyncio
+import base64
 import re
 from typing import Any
 
@@ -144,6 +145,99 @@ def test_verify_message_is_verdict_statement_notes():
 
 def _tool_extra(handler: Any, **kwargs: Any) -> ContentToolResult:
     return llm._as_tool(handler)(**kwargs)
+
+
+class _Att:
+    """The attachment fields shinychat passes to on_user_submit."""
+
+    def __init__(self, name: str, mime: str, text: str) -> None:
+        self.name = name
+        self.mime = mime
+        self.data_url = f"data:{mime};base64," + base64.b64encode(text.encode("utf-8")).decode(
+            "ascii"
+        )
+
+
+_INDEXED_NOTE = "Indexed 2 document(s): a.md, b.csv \u2014 ask_docs now reads them."
+_FAIL_NOTE = agent_server._FAIL_NOTE
+
+
+def test_attachments_are_decoded_and_indexed_once(monkeypatch: pytest.MonkeyPatch):
+    async def main() -> None:
+        calls: list[tuple[list[str], list[str]]] = []
+
+        def fake(documents: list[str], names: list[str] | None = None) -> Any:
+            calls.append((list(documents), list(names)))
+
+        monkeypatch.setattr(agent_server.rag, "index_documents", fake)
+        indexed: dict[str, str] = {}
+        notes = await agent_server._index_attachments(
+            [_Att("a.md", "text/markdown", "# hi"), _Att("b.csv", "text/csv", "x,y")], indexed
+        )
+        assert calls == [(["# hi", "x,y"], ["a.md", "b.csv"])]
+        assert notes == [_INDEXED_NOTE]
+        assert indexed == {"a.md": "# hi", "b.csv": "x,y"}
+
+    asyncio.run(main())
+
+
+def test_a_duplicate_attachment_is_not_indexed_again(monkeypatch: pytest.MonkeyPatch):
+    async def main() -> None:
+        calls: list[Any] = []
+
+        def fake(documents: list[str], names: list[str] | None = None) -> Any:
+            calls.append((list(documents), list(names)))
+
+        monkeypatch.setattr(agent_server.rag, "index_documents", fake)
+        indexed: dict[str, str] = {"a.md": "# hi", "b.csv": "x,y"}
+        notes = await agent_server._index_attachments(
+            [_Att("a.md", "text/markdown", "# hi")], indexed
+        )
+        assert calls == []
+        assert notes == []
+        # A new upload carries the accumulated set: index_documents replaces,
+        # so dropping old documents would lose them from the session index.
+        await agent_server._index_attachments([_Att("c.txt", "text/plain", "third")], indexed)
+        assert calls[-1] == (["# hi", "x,y", "third"], ["a.md", "b.csv", "c.txt"])
+
+    asyncio.run(main())
+
+
+def test_pdfs_and_images_are_skipped_with_a_note(monkeypatch: pytest.MonkeyPatch):
+    async def main() -> None:
+        calls: list[Any] = []
+
+        def fake(documents: list[str], names: list[str] | None = None) -> Any:
+            calls.append(documents)
+
+        monkeypatch.setattr(agent_server.rag, "index_documents", fake)
+        notes = await agent_server._index_attachments(
+            [_Att("paper.pdf", "application/pdf", "%PDF-"), _Att("pic.png", "image/png", "x")],
+            {},
+        )
+        assert calls == []
+        assert notes == ["Skipped paper.pdf, pic.png \u2014 only text and CSV files are indexed."]
+
+    asyncio.run(main())
+
+
+def test_an_indexing_failure_appends_a_note_and_does_not_raise(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def main() -> None:
+        def broken(documents: list[str], names: list[str] | None = None) -> Any:
+            raise RuntimeError("no embeddings")
+
+        monkeypatch.setattr(agent_server.rag, "index_documents", broken)
+        indexed: dict[str, str] = {}
+        notes = await agent_server._index_attachments(
+            [_Att("a.md", "text/markdown", "hi")], indexed
+        )
+        assert notes == [_FAIL_NOTE]
+        # The failed upload stays unindexed, so a retry can pick it up.
+        assert indexed == {}
+
+    asyncio.run(main())
 
 
 def test_sensitivity_result_carries_a_framed_card():

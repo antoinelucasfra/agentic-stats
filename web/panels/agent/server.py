@@ -25,11 +25,13 @@ transcript as a warning, not as an answer.
 from __future__ import annotations
 
 import asyncio
+import base64
 from typing import Any
 
 from shiny import Inputs, Outputs, Session, module, reactive, ui
 from shinychat import Chat
 
+from rag import tools as rag
 from stats import verify
 from stats.session import use_session
 from transports import llm
@@ -41,6 +43,10 @@ SLOT_BUSY = "All three agent slots are busy. Wait for a turn to finish and retry
 TURN_BUDGET = (
     f"{TURNS_PER_SESSION} turns is the session budget. Reload the page to start a fresh analysis."
 )
+
+_FAIL_NOTE = "Attachments could not be indexed this turn; the reply continues without them."
+
+_TEXT_SUFFIXES = (".md", ".csv", ".tsv", ".txt")
 
 GREETING = (
     "Does the oat variety matter, once we account for block variation? Ask me \u2014 "
@@ -119,6 +125,49 @@ class GuardedClient:
         return stream()
 
 
+def _text_like(att: Any) -> bool:
+    """Text and CSV files index cleanly; PDFs and images do not."""
+    if att.mime.startswith("text/"):
+        return True
+    return str(att.name or "").lower().endswith(_TEXT_SUFFIXES)
+
+
+def _decode(att: Any) -> str:
+    """The attachment's payload: base64 data URL to text, lenient on bad bytes."""
+    payload = att.data_url.split(",", 1)[1]
+    return base64.b64decode(payload).decode("utf-8", errors="replace")
+
+
+async def _index_attachments(attachments: list[Any], indexed: dict[str, str]) -> list[str]:
+    """Index text-like attachments into the session's rag index; return chat notes.
+
+    `indexed` maps name to decoded text across the session, so a re-uploaded
+    file is not indexed twice. `index_documents` replaces the session index,
+    so the call carries the full accumulated set; only the new names are
+    announced. Never raises: a failed index must not block the model turn.
+    """
+    notes: list[str] = []
+    try:
+        skipped = [a.name for a in attachments if not _text_like(a)]
+        if skipped:
+            notes.append(
+                f"Skipped {', '.join(skipped)} \u2014 only text and CSV files are indexed."
+            )
+        new = [(a.name, _decode(a)) for a in attachments if _text_like(a) and a.name not in indexed]
+        if new:
+            names = [*indexed, *(name for name, _ in new)]
+            texts = [*indexed.values(), *(text for _, text in new)]
+            rag.index_documents(texts, names)
+            indexed.update(new)
+            notes.append(
+                f"Indexed {len(new)} document(s): {', '.join(name for name, _ in new)}"
+                " \u2014 ask_docs now reads them."
+            )
+    except Exception:
+        return [*notes, _FAIL_NOTE]
+    return notes
+
+
 def _verify_message(report: verify.VerificationReport) -> str:
     """One markdown block: verdict, statement, and the notes that back it."""
     mark = "✅" if report.verdict == "clean" else "⚠️"
@@ -129,7 +178,13 @@ def _verify_message(report: verify.VerificationReport) -> str:
 
 @module.server
 def agent_server(input: Inputs, output: Outputs, session: Session, store: reactive.Value) -> None:
-    state: dict[str, Any] = {"key": None, "client": None, "trace": [], "turns": 0}
+    state: dict[str, Any] = {
+        "key": None,
+        "client": None,
+        "trace": [],
+        "turns": 0,
+        "indexed": {},
+    }
 
     def build(preset_id: str, model: str, base_url: str, api_key: str) -> GuardedClient:
         """A guarded client for the given endpoint, refusing turns if it cannot resolve."""
@@ -184,7 +239,9 @@ def agent_server(input: Inputs, output: Outputs, session: Session, store: reacti
 
     @chat.on_user_submit
     async def _on_submit(user_input: str, attachments: list[Any]) -> None:
-        """Placeholder for the rag/ integration: index attachments, if any."""
+        """Index attachments alongside shinychat's stream; notes land in the chat."""
+        for note in await _index_attachments(attachments, state["indexed"]):
+            await chat.append_message(note)
 
     @reactive.effect
     async def _verify_turn() -> None:
