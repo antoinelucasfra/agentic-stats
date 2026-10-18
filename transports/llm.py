@@ -238,8 +238,9 @@ def build_client(
 ) -> chatlas.ChatOpenAICompletions:
     """An OpenAI-compatible client with every registered tool attached.
 
-    Pass a `trace` list and each tool call appends one `TraceEvent`, which the
-    Agent panel renders after the turn. Tool errors already reach the model:
+    Pass a `trace` list and each tool call appends one `TraceEvent`. The trace
+    list is optional diagnostics, consumed by tests and the CLI loop; the web
+    Agent panel does not read it. Tool errors already reach the model:
     chatlas converts a raising tool into an error result and feeds it back.
     """
     client = chatlas.ChatOpenAICompletions(

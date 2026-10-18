@@ -43,6 +43,9 @@ class SessionDocs:
 
     docs: dict[str, str] = field(default_factory=dict)
     index: DocIndex | None = None
+    # Attachment indexing runs in a worker thread and can overlap a model-called
+    # index_documents on this same map; the lock makes read-merge-commit atomic.
+    lock: threading.Lock = field(default_factory=threading.Lock)
 
 
 # Session state: the lazily built book index, and one document map per session
@@ -281,12 +284,13 @@ def index_documents(documents: list[str], names: list[str] | None = None) -> Ind
             f"Got {len(documents)} documents and {len(names)} names; pass one name per document."
         )
     state = _session_docs()
-    merged = {**state.docs, **dict(zip(names, documents, strict=True))}
-    built = _build_user_index(merged)
-    # Commit only after the build succeeded, so a failed embed leaves the map
-    # untouched and a retry can pick the documents back up.
-    state.docs = merged
-    state.index = built
+    with state.lock:
+        merged = {**state.docs, **dict(zip(names, documents, strict=True))}
+        built = _build_user_index(merged)
+        # Commit only after the build succeeded, so a failed embed leaves the map
+        # untouched and a retry can pick the documents back up.
+        state.docs = merged
+        state.index = built
     return IndexDocumentsResult(
         names=names,
         n_documents=len(merged),

@@ -18,6 +18,7 @@ import hashlib
 import ipaddress
 import socket
 import tempfile
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -30,6 +31,11 @@ import httpx
 __all__ = ["FetchError", "FetchedFile", "assert_public_url", "fetch_table"]
 
 Format = Literal["csv", "parquet", "json"]
+
+# chisle: global lock; only one pinned download at a time. Gate downloads already
+# serialize per session, so throughput loss is bounded. Needed because concurrent
+# fetch_table calls interleave the global socket.getaddrinfo swap.
+_PIN_LOCK = threading.Lock()
 
 # Only these content types name a format outright. Anything else informative is
 # rejected; the generic ones fall back to the URL path.
@@ -250,12 +256,23 @@ def fetch_table(
     Redirects are followed by hand so every hop is checked by `assert_public_url`
     before it is read. The body is streamed and abandoned the moment it crosses
     `max_bytes`, so a server that lies about its size cannot fill memory.
+
+    `trust_env=False` keeps HTTPS_PROXY from moving name resolution outside the
+    pin. Trade-off: a host reachable only through a proxy env now fails here,
+    which matches the gate's threat model, since there is no unverified path.
     """
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
     target, verified = _approve(url)
 
-    with httpx.Client(follow_redirects=False, timeout=timeout_s) as client:
+    # The pin window spans the whole redirect/stream loop: the resolver swap is
+    # process-global, so concurrent fetches could interleave it (one fetch
+    # restoring the real resolver while another is mid-flight, or leaking a pin
+    # as the process resolver).
+    with (
+        _PIN_LOCK,
+        httpx.Client(follow_redirects=False, trust_env=False, timeout=timeout_s) as client,
+    ):
         for _ in range(_MAX_REDIRECTS + 1):
             with (
                 _pin_dns(urlsplit(target).hostname, verified),

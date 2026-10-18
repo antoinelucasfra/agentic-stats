@@ -29,6 +29,8 @@ def _build() -> dict[str, Any]:
 
     A `threading.Lock` because two sessions can reach the empty cache on the
     same loop tick; the compute itself is sync and finishes in under a second.
+    Only successes are cached: a failed compute is retried on the next render
+    instead of being frozen for the process lifetime.
     """
     with _LOCK:
         if not _CACHE:
@@ -39,16 +41,20 @@ def _build() -> dict[str, Any]:
                 }
                 _CACHE.update({"dataset": dataset, "cards": cards, "error": None})
             except Exception as exc:
-                _CACHE.update({"dataset": None, "cards": {}, "error": str(exc)})
+                # Not cached: the next render (or reload) retries the compute.
+                return {"dataset": None, "cards": {}, "error": str(exc)}
         return _CACHE
 
 
-def _error_card() -> list[Any]:
+def _error_card(error: str) -> list[Any]:
     return [
         ui.div(
             ui.tags.strong("The overview data is not loaded yet."),
-            ui.tags.p(f"Fetch it with {_FETCH_COMMAND} on the server, then reload."),
-            ui.tags.p(_CACHE.get("error", ""), class_="text-muted small"),
+            ui.tags.p(
+                f"Fetch it with {_FETCH_COMMAND} on the server; the retry runs when "
+                "the panel re-renders, so a reload also works."
+            ),
+            ui.tags.p(error, class_="text-muted small"),
             class_="alert alert-warning",
         )
     ]
@@ -66,7 +72,7 @@ def overview_server(
     @render.ui
     def ov_dataset() -> Any:
         if overview["error"] is not None:
-            return _error_card()
+            return _error_card(overview["error"])
         dataset: DatasetDescription = overview["dataset"]
         return ui.layout_column_wrap(
             ui.value_box("Rows", f"{dataset.n_rows:,}"),
@@ -85,7 +91,7 @@ def _overview_renderer(card: dict[str, Any], overview: dict[str, Any]) -> Any:
     @render.ui
     def card_output() -> list[Any]:
         if overview["error"] is not None:
-            return _error_card()
+            return _error_card(overview["error"])
         return views.card_view(card["tool"], overview["cards"][card["id"]])
 
     return card_output

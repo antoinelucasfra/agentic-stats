@@ -18,7 +18,7 @@ from pathlib import Path
 import httpx
 
 from utils import config
-from utils.fetch import assert_public_url
+from utils.fetch import _approve, _pin_dns
 
 __all__ = ["INDEX_URL", "CatalogEntry", "curated", "fetch_index", "parse_index", "search"]
 
@@ -113,8 +113,10 @@ def fetch_index(*, force: bool = False, timeout_s: float = 30.0) -> list[Catalog
     """The Rdatasets index, cached on disk and refetched when missing or forced."""
     path = index_path()
     if not path.exists() or force:
-        assert_public_url(INDEX_URL)
-        response = httpx.get(INDEX_URL, timeout=timeout_s, follow_redirects=False)
+        # Same trust boundary as fetch_table: fixed trusted host, so pin the
+        # connect to the addresses the gate approved instead of re-resolving.
+        with _pin_dns(*_approve(INDEX_URL)):
+            response = httpx.get(INDEX_URL, timeout=timeout_s, follow_redirects=False)
         response.raise_for_status()
         path.parent.mkdir(parents=True, exist_ok=True)
         staging = path.with_suffix(path.suffix + ".part")

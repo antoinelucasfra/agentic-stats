@@ -72,6 +72,12 @@ def chunk_markdown(text: str, source: str) -> list[Chunk]:
         body = _pack(_paragraphs(lines))
         for passage in body:
             if heading_line:
+                # A pathological heading never gets to push a chunk past the cap.
+                heading_line = (
+                    heading_line[:MAX_PARAGRAPH]
+                    if len(heading_line) > MAX_PARAGRAPH
+                    else heading_line
+                )
                 chunk_text = f"{heading_line}\n\n{passage}"
             else:
                 chunk_text = f"# {title or Path(source).stem}\n\n{passage}"
@@ -108,14 +114,11 @@ def _pack(paragraphs: list[str]) -> list[str]:
     carried = False  # buffer[0] is a carried overlap, not fresh content
 
     def flush() -> None:
-        if buffer and not carried:
+        if buffer:
             packed.append("\n\n".join(buffer))
 
     for paragraph in paragraphs:
         current = len("\n\n".join(buffer))
-        # An overlap never justifies breaking the hard cap: drop it instead.
-        if carried and current + len(paragraph) > MAX_PARAGRAPH:
-            buffer, carried, current = [], False, 0
         if buffer and not carried and current + len(paragraph) > TARGET:
             flush()
             tail = _tail(buffer[-1])

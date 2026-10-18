@@ -8,6 +8,7 @@ suite never touches the network and never needs fastembed.
 from __future__ import annotations
 
 import re
+import threading
 import zlib
 from pathlib import Path
 from typing import ClassVar
@@ -88,6 +89,14 @@ def test_a_giant_single_paragraph_is_hard_split_under_the_cap():
     chunks = chunk.chunk_markdown(" ".join(words), "csv.md")
     assert len(chunks) > 1
     assert all(len(c.text) <= chunk.MAX_PARAGRAPH + 10 for c in chunks)  # + title prefix
+
+
+def test_a_pathological_heading_is_truncated_to_the_cap():
+    heading = "# " + "x" * (chunk.MAX_PARAGRAPH + 50)
+    chunks = chunk.chunk_markdown(f"{heading}\n\nBody text.", "huge.md")
+    assert len(chunks) == 1
+    heading_in_chunk = chunks[0].text.split("\n\n", 1)[0]
+    assert len(heading_in_chunk) == chunk.MAX_PARAGRAPH
 
 
 def test_hard_split_pieces_keep_order_and_content():
@@ -335,6 +344,35 @@ def test_index_documents_builds_a_session_local_index(tmp_path, monkeypatch):
             _spec_call("index_documents", documents=["a", "b"], names=["only-one.md"])
         with pytest.raises(Exception, match="at least one document"):
             _spec_call("index_documents", documents=[], names=None)
+    finally:
+        rag_tools.reset_session()
+
+
+def test_index_documents_survives_concurrent_calls(tmp_path, monkeypatch):
+    """Two racing index_documents calls on one SessionDocs must not drop either set."""
+    monkeypatch.setenv("AGENTIC_STATS_DOCS_DIR", str(tmp_path / "absent"))  # no book corpus
+    monkeypatch.setattr(rag_tools, "_embed", lambda: fake_embed)
+    rag_tools.reset_session()
+    try:
+        names_a = ["alpha-1.md", "alpha-2.md"]
+        names_b = ["bravo-1.md", "bravo-2.md"]
+
+        def other_thread() -> None:
+            rag_tools.index_documents(
+                ["Bravo document about potassium.", "Bravo second document text."], names_b
+            )
+
+        thread = threading.Thread(target=other_thread)
+        thread.start()
+        rag_tools.index_documents(
+            ["Alpha document about magnesium.", "Alpha second document text."], names_a
+        )
+        thread.join()
+
+        state = rag_tools._session_docs()
+        assert sorted(state.docs) == sorted(names_a + names_b)
+        assert state.index is not None
+        assert {c.source for c in state.index.chunks} == set(names_a + names_b)
     finally:
         rag_tools.reset_session()
 
