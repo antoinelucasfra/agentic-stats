@@ -154,7 +154,6 @@ def data_server(
         except ToolError:
             ref = current.table()
         profile = roles.infer_profile(ref.frame, ref.roles or None)
-        profile = roles.infer_profile(ref.frame, ref.roles or None)
         by_column: dict[str, list[str]] = {}
         for guess in sorted(profile.guesses, key=lambda item: -item.confidence):
             by_column.setdefault(guess.column, []).append(

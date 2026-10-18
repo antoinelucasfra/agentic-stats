@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import re
+import time
 from typing import Any
 
 import pytest
@@ -150,8 +151,8 @@ def test_verify_message_is_verdict_statement_notes():
     assert clean.startswith("✅ Verify:")
 
 
-def _tool_extra(handler: Any, **kwargs: Any) -> ContentToolResult:
-    return llm._as_tool(handler)(**kwargs)
+async def _tool_extra(handler: Any, **kwargs: Any) -> ContentToolResult:
+    return await llm._as_tool(handler)(**kwargs)
 
 
 class _Att:
@@ -256,7 +257,7 @@ def test_sensitivity_result_carries_a_framed_card():
 
         return _R()
 
-    extra = _tool_extra(sensitivity, result_id="r1").extra
+    extra = asyncio.run(_tool_extra(sensitivity, result_id="r1")).extra
     display = extra["display"]
     assert display.title == "Sensitivity check"
     assert display.value_preview == "2/3 checks stable"
@@ -271,7 +272,7 @@ def test_plot_result_carries_a_spec_label():
 
         return _R()
 
-    display = llm._as_tool(plot)(kind="box", x="variety", y="height").extra["display"]
+    display = asyncio.run(llm._as_tool(plot)(kind="box", x="variety", y="height")).extra["display"]
     assert display.title == "Plot"
     assert display.label == "box, variety, height"
     assert display.open_style == "framed"
@@ -294,7 +295,7 @@ def test_fit_model_result_previews_the_first_estimate():
 
         return _R()
 
-    display = _tool_extra(fit_model, result_id="r1").extra["display"]
+    display = asyncio.run(_tool_extra(fit_model, result_id="r1")).extra["display"]
     assert display.title == "Fitted model"
     assert display.value_preview == "varietyGoldenRain: 1.2 [0.4, 2.0]"
 
@@ -307,7 +308,7 @@ def test_unknown_tools_get_a_plain_titled_card():
 
         return _R()
 
-    display = _tool_extra(analysis_status).extra["display"]
+    display = asyncio.run(_tool_extra(analysis_status)).extra["display"]
     assert display.title == "Analysis status"
     assert display.value_preview is None
 
@@ -320,6 +321,57 @@ def test_a_result_without_the_expected_fields_degrades_quietly():
 
         return _R()
 
-    display = _tool_extra(sensitivity, result_id="r1").extra["display"]
+    display = asyncio.run(_tool_extra(sensitivity, result_id="r1")).extra["display"]
     assert display.title == "Sensitivity check"
     assert display.value_preview is None
+
+
+def test_tool_handler_runs_off_the_event_loop():
+    """The interleaving proof: while the sync handler blocks its thread, the
+    loop still turns, so the marker task completes first. With a blocking
+    wrapper the handler would finish before `asyncio.sleep` ever resumed.
+    """
+
+    async def main() -> None:
+        handler_done = asyncio.Event()
+
+        def slow_tool() -> Any:
+            time.sleep(0.3)
+            handler_done.set()
+
+            class _R:
+                def model_dump(self) -> dict[str, Any]:
+                    return {}
+
+            return _R()
+
+        task = asyncio.create_task(llm._as_tool(slow_tool)())
+        await asyncio.sleep(0.1)
+        assert not handler_done.is_set(), "the handler blocked the event loop"
+        result = await task
+        assert handler_done.is_set()
+        assert isinstance(result, ContentToolResult)
+
+    asyncio.run(main())
+
+
+def test_attachment_names_are_sanitised_in_notes_and_docs(monkeypatch: pytest.MonkeyPatch):
+    async def main() -> None:
+        calls: list[list[str]] = []
+
+        def fake(documents: list[str], names: list[str] | None = None) -> Any:
+            calls.append(list(names))
+            docs.docs.update(zip(names, documents, strict=True))
+
+        monkeypatch.setattr(agent_server.rag, "index_documents", fake)
+        docs = agent_server.rag.SessionDocs()
+        notes = await agent_server._index_attachments(
+            [_Att("<img src=x>.md", "text/markdown", "# hi")], docs
+        )
+        # No raw brackets reach the chat message...
+        assert notes == ["Indexed 1 document(s): img src=x.md \u2014 ask_docs now reads them."]
+        # ...and the stored name and citation id carry the sanitised form.
+        assert calls == [["img src=x.md"]]
+        assert docs.docs == {"img src=x.md": "# hi"}
+
+    asyncio.run(main())

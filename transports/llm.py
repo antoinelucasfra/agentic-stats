@@ -7,6 +7,7 @@ API, which Ollama, vLLM, LM Studio and Groq do not implement. Same defaults as
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import os
 from dataclasses import dataclass
@@ -210,11 +211,16 @@ def _tool_display(name: str, value: dict[str, Any]) -> ToolResultDisplay | None:
 
 
 def _as_tool(handler: Any) -> Any:
-    """Wrap a stats tool so the model gets JSON and every result has one shape."""
+    """Wrap a stats tool so the model gets JSON and every result has one shape.
+
+    The wrapper is async and runs the sync handler in a worker thread: chatlas
+    awaits async tools directly on the event loop, and without the thread a
+    slow fit_model would stall every concurrent session.
+    """
 
     @functools.wraps(handler)
-    def call(**kwargs: Any) -> ContentToolResult:
-        result = handler(**kwargs)
+    async def call(**kwargs: Any) -> ContentToolResult:
+        result = await asyncio.to_thread(handler, **kwargs)
         value = result.model_dump()
         display = _tool_display(getattr(handler, "__name__", ""), value)
         extra: dict[str, Any] = {"display": display} if display is not None else {}

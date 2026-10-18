@@ -12,6 +12,7 @@ result.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -163,17 +164,22 @@ def playground_server(
 
     @reactive.calc
     @reactive.event(input.extract)
-    def extraction_outcome() -> Any:
-        """The notes as rows, or the exception to show; the house outcome shape."""
+    async def extraction_outcome() -> Any:
+        """The notes as rows, or the exception to show; the house outcome shape.
+
+        Async with the extraction in a worker thread: the call is a
+        multi-second LLM request, and a sync reactive calc would run it on the
+        event loop and stall every other session.
+        """
         try:
             columns = [name.strip() for name in input.notes_columns().split(",")]
-            return extraction.extract_columns(input.notes(), columns)
+            return await asyncio.to_thread(extraction.extract_columns, input.notes(), columns)
         except Exception as exc:
             return exc
 
     @render.ui
-    def notes_result() -> Any:
-        frame = extraction_outcome()
+    async def notes_result() -> Any:
+        frame = await extraction_outcome()
         if isinstance(frame, Exception):
             return ui.div(str(frame) or type(frame).__name__, class_="alert alert-danger")
         if frame.empty:
@@ -197,8 +203,8 @@ def playground_server(
         return parts
 
     @render.download_button(filename="extracted-notes.csv")
-    def download_notes_csv():
-        frame = extraction_outcome()
+    async def download_notes_csv():
+        frame = await extraction_outcome()
         if isinstance(frame, Exception) or frame.empty:
             ui.notification_show("Extract the notes before downloading the CSV.", type="error")
             yield ""

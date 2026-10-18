@@ -128,9 +128,9 @@ def anova_blocks(result: AnovaResult) -> list[Block]:
         chart_block(
             bands,
             lambda frame: charts.dot_with_ci(
-                frame, f"Mean signal by {result.factor}", "Mean signal"
+                frame, f"Mean response by {result.factor}", "Mean response"
             ),
-            alt=f"Mean assay signal for each level of {result.factor}",
+            alt=f"Mean response for each level of {result.factor}",
         ),
     ]
 
@@ -159,7 +159,7 @@ def marginal_blocks(result: MarginalMeansResult) -> list[Block]:
         chart_block(
             bands,
             lambda frame: charts.dot_with_ci(
-                frame, "Marginal means with confidence intervals", "Mean signal"
+                frame, "Marginal means with confidence intervals", "Mean response"
             ),
             alt=f"Marginal means with {confidence}% confidence intervals per level",
             empty_message="No estimates to plot.",

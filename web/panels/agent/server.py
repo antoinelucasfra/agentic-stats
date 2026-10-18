@@ -48,6 +48,17 @@ _FAIL_NOTE = "Attachments could not be indexed this turn; the reply continues wi
 
 _TEXT_SUFFIXES = (".md", ".csv", ".tsv", ".txt")
 
+# Characters that make a filename active markdown or HTML. Attachment names
+# land in chat messages and in the `user:<name>#n` citation ids, so they are
+# stripped once here at the boundary, before they reach either.
+_UNSAFE_CHARS = str.maketrans("", "", "<>#`[]")
+
+
+def _safe_name(name: str) -> str:
+    """The attachment name without markdown/HTML-active characters."""
+    return name.translate(_UNSAFE_CHARS)
+
+
 GREETING = (
     "Does the oat variety matter, once we account for block variation? Ask me \u2014 "
     "I will frame the question, fit, try to break my own conclusion, and verify "
@@ -134,6 +145,10 @@ def _text_like(att: Any) -> bool:
     return str(att.name or "").lower().endswith(_TEXT_SUFFIXES)
 
 
+def _names(names: list[str]) -> str:
+    return ", ".join(_safe_name(name) for name in names)
+
+
 def _decode(att: Any) -> str:
     """The attachment's payload: base64 data URL to text, lenient on bad bytes."""
     payload = att.data_url.split(",", 1)[1]
@@ -152,18 +167,21 @@ async def _index_attachments(attachments: list[Any], docs: rag.SessionDocs) -> l
     try:
         skipped = [a.name for a in attachments if not _text_like(a)]
         if skipped:
-            notes.append(
-                f"Skipped {', '.join(skipped)} \u2014 only text and CSV files are indexed."
-            )
+            notes.append(f"Skipped {_names(skipped)} \u2014 only text and CSV files are indexed.")
         new = [
-            (a.name, _decode(a)) for a in attachments if _text_like(a) and a.name not in docs.docs
+            (_safe_name(a.name), _decode(a))
+            for a in attachments
+            if _text_like(a) and _safe_name(a.name) not in docs.docs
         ]
         if new:
+            names = [name for name, _ in new]
+            documents = [text for _, text in new]
             with rag.use_docs(docs):
-                rag.index_documents([text for _, text in new], [name for name, _ in new])
+                # Off the event loop: the embedder's HTTP round trip must not
+                # stall the other sessions' turns.
+                await asyncio.to_thread(rag.index_documents, documents, names)
             notes.append(
-                f"Indexed {len(new)} document(s): {', '.join(name for name, _ in new)}"
-                " \u2014 ask_docs now reads them."
+                f"Indexed {len(new)} document(s): {_names(names)} \u2014 ask_docs now reads them."
             )
     except Exception:
         return [*notes, _FAIL_NOTE]

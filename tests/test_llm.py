@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 from types import SimpleNamespace
@@ -32,7 +33,8 @@ def test_tool_results_reach_the_model_as_json():
     client = llm.build_client(**DUMMY)
     store = session.SessionStore.from_frame(stats_tools.load_dataset())
     with session.use_session(store):
-        result = client._tools["frame_question"].func(question="Does variety matter?")
+        call = client._tools["frame_question"].func
+        result = asyncio.run(call(question="Does variety matter?"))
 
     payload = json.loads(result.get_model_value())
 
@@ -46,7 +48,8 @@ def test_tool_errors_carry_the_actionable_message():
 
     try:
         with session.use_session(store):
-            client._tools["frame_question"].func(question="Which variety wins?", outcome="nope")
+            call = client._tools["frame_question"].func
+            asyncio.run(call(question="Which variety wins?", outcome="nope"))
     except Exception as exc:
         assert "Available columns" in str(exc)
     else:  # pragma: no cover - the tool must reject an unknown column
