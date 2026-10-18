@@ -8,6 +8,7 @@ suite never touches the network and never needs fastembed.
 from __future__ import annotations
 
 import re
+import sys
 import threading
 import zlib
 from pathlib import Path
@@ -279,9 +280,10 @@ def test_presets_embed_needs_a_model():
         embed.presets_embed(model="")
 
 
-def test_local_embed_names_the_missing_extra():
+def test_local_embed_names_the_missing_extra(monkeypatch):
+    # Hide fastembed regardless of install state (CI runs with --all-extras).
+    monkeypatch.setitem(sys.modules, "fastembed", None)
     with pytest.raises(RuntimeError, match="rag extra"):
-        # fastembed is deliberately not installed in the dev environment.
         embed.local_embed()
 
 
