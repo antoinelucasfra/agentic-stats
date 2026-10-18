@@ -128,9 +128,9 @@ def anova_blocks(result: AnovaResult) -> list[Block]:
         chart_block(
             bands,
             lambda frame: charts.dot_with_ci(
-                frame, f"Mean signal by {result.factor}", "Mean signal"
+                frame, f"Mean response by {result.factor}", "Mean response"
             ),
-            alt=f"Mean assay signal for each level of {result.factor}",
+            alt=f"Mean response for each level of {result.factor}",
         ),
     ]
 
@@ -159,7 +159,7 @@ def marginal_blocks(result: MarginalMeansResult) -> list[Block]:
         chart_block(
             bands,
             lambda frame: charts.dot_with_ci(
-                frame, "Marginal means with confidence intervals", "Mean signal"
+                frame, "Marginal means with confidence intervals", "Mean response"
             ),
             alt=f"Marginal means with {confidence}% confidence intervals per level",
             empty_message="No estimates to plot.",
@@ -412,8 +412,183 @@ def correlation_blocks(result: Any) -> list[Block]:
     ]
 
 
+def _verdict_blocks(verdicts: list[Any]) -> list[Block]:
+    """Quality and diagnostic verdicts, worst first, each with its remedy."""
+    if not verdicts:
+        return []
+    rank = {"blocked": 0, "caution": 1, "ok": 2}
+    css = {"blocked": "text-danger", "caution": "text-warning-emphasis", "ok": "text-muted"}
+    blocks: list[Block] = []
+    for verdict in sorted(verdicts, key=lambda item: rank.get(str(item.status), 3)):
+        children: list[Any] = [
+            ui.tags.strong(f"{verdict.check}: "),
+            ui.tags.span(verdict.statement),
+        ]
+        if verdict.remedy:
+            children.append(ui.tags.div(f"Fix: {verdict.remedy}", class_="small text-muted"))
+        blocks.append(
+            Block(
+                "warning",
+                ui.tags.p(*children, class_=css.get(str(verdict.status), "")),
+            )
+        )
+    return blocks
+
+
+def plan_blocks(result: Any) -> list[Block]:
+    """The stated estimand and the checklist the ledger will hold the model to."""
+    return [
+        metrics(
+            [
+                ("Target", str(result.target)),
+                ("Design", str(result.design)),
+                ("Outcome", str(result.outcome)),
+                ("Unit", str(result.unit_of_analysis)),
+            ]
+        ),
+        Block("text", ui.tags.p(ui.tags.strong("Estimand: "), result.estimand)),
+        Block("heading", ui.tags.h5("Plan")),
+        Block("notes", ui.tags.ol(*[ui.tags.li(item) for item in result.plan])),
+        *notes(result.required_checks),
+        *[Block("warning", ui.tags.p(item, class_="text-danger")) for item in result.refusals],
+    ]
+
+
+def profile_blocks(result: Any) -> list[Block]:
+    return [
+        metrics(
+            [
+                ("Rows", f"{result.n_rows:,}"),
+                ("Columns", str(result.n_columns)),
+                ("Source", result.source or "unknown"),
+                ("Roles", ", ".join(sorted(result.roles))),
+            ]
+        ),
+        table(
+            ["Column", "Type", "Missing", "Distinct", "Min", "Max", "Roles"],
+            [
+                [
+                    column.name,
+                    column.dtype,
+                    f"{column.missing} ({column.missing_rate:.0%})",
+                    column.distinct,
+                    fmt(column.minimum, 3),
+                    fmt(column.maximum, 3),
+                    ", ".join(column.roles),
+                ]
+                for column in result.columns
+            ],
+        ),
+        *_verdict_blocks(result.verdicts),
+        *notes(result.notes),
+    ]
+
+
+def query_blocks(result: Any) -> list[Block]:
+    return [
+        metrics(
+            [
+                ("Rows", f"{result.row_count:,}"),
+                ("Truncated", "yes" if result.truncated else "no"),
+                ("Elapsed", f"{result.elapsed_s:.2f}s"),
+            ]
+        ),
+        table(list(result.columns), result.rows),
+        Block("warning", ui.tags.p(result.note, class_="text-warning-emphasis")),
+        *notes(result.notes),
+    ]
+
+
+def plot_blocks(result: Any) -> list[Block]:
+    return [
+        Block("chart", ui.img(src=result.image, alt=result.alt_text, width="100%")),
+        metrics(
+            [
+                ("Rows", str(result.features.n_rows)),
+                ("Series", str(result.features.series)),
+                ("Slope", fmt(result.features.trend_slope, 4)),
+                ("Gap", fmt(result.features.largest_gap, 4)),
+            ]
+        ),
+        Block("text", ui.tags.p(result.features.trend_direction)),
+        Block("notes", ui.tags.ul(*[ui.tags.li(item) for item in result.features.extremes])),
+        *notes([*result.notes, *result.features.notes]),
+    ]
+
+
+def load_blocks(result: Any) -> list[Block]:
+    """A table that just entered the session: what it is and what it can answer."""
+    return [
+        metrics(
+            [
+                ("Table", result.name),
+                ("Rows", f"{result.n_rows:,}"),
+                ("Columns", str(len(result.columns))),
+            ]
+        ),
+        Block("text", ui.tags.p(ui.tags.small(result.source or "unknown source"))),
+        metrics([(role.title(), column) for role, column in result.suggested.items()]),
+        *notes(result.profile_notes),
+        Block("text", ui.tags.p(ui.tags.em(result.next))),
+    ]
+
+
+def status_blocks(result: Any) -> list[Block]:
+    return [
+        metrics(
+            [
+                ("Complete", "yes" if result.complete else "no"),
+                ("Blocking", str(len(result.blocking))),
+                ("Open items", str(len(result.missing))),
+            ]
+        ),
+        Block("text", ui.tags.p(ui.tags.strong("Next: "), result.recommended_next)),
+        *_verdict_blocks(result.blocking),
+        *notes(result.missing),
+    ]
+
+
+def explanation_blocks(result: Any) -> list[Block]:
+    """A reading: the effects, the caveats, and what the result cannot establish."""
+    blocks = [Block("heading", ui.tags.h5(f"Reading of {result.source_result_id}"))]
+    statements = [item.statement for item in result.effects] or list(result.reading)
+    if statements:
+        blocks.append(Block("notes", ui.tags.ul(*[ui.tags.li(item) for item in statements])))
+    if result.caveats:
+        blocks.append(
+            Block(
+                "warning",
+                ui.tags.div(
+                    ui.tags.strong("Caveats"),
+                    ui.tags.ul(*[ui.tags.li(item) for item in result.caveats]),
+                ),
+            )
+        )
+    if result.cannot_say:
+        blocks.append(
+            Block(
+                "warning",
+                ui.tags.div(
+                    ui.tags.strong("Cannot say"),
+                    ui.tags.ul(*[ui.tags.li(item) for item in result.cannot_say]),
+                    class_="text-danger",
+                ),
+            )
+        )
+    if result.suggested_phrasing:
+        blocks.append(Block("text", ui.tags.p(ui.tags.em(result.suggested_phrasing))))
+    return blocks
+
+
 _VIEWS: dict[str, Callable[[Any], list[Block]]] = {
     "describe_dataset": dataset_blocks,
+    "frame_question": plan_blocks,
+    "profile_table": profile_blocks,
+    "run_sql": query_blocks,
+    "load_table": load_blocks,
+    "analysis_status": status_blocks,
+    "plot": plot_blocks,
+    "explain_result": explanation_blocks,
     "fit_mixed_model": mixed_blocks,
     "anova_effect": anova_blocks,
     "marginal_means": marginal_blocks,

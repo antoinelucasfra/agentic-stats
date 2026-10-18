@@ -7,20 +7,32 @@ API, which Ollama, vLLM, LM Studio and Groq do not implement. Same defaults as
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import os
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import chatlas
 from chatlas import ContentToolResult
 
 from stats import registry
 
+if TYPE_CHECKING:
+    from shinychat.types import ToolResultDisplay
+
 DEFAULT_BASE_URL = "http://127.0.0.1:11434/v1"
 DEFAULT_MODEL = "qwen2.5:7b"
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 OPENAI_BASE_URL = "https://api.openai.com/v1"
+
+# Every provider below publishes an OpenAI-compatible chat completions endpoint,
+# checked against its own documentation. The base paths are not uniform: Gemini
+# carries the version inside the compatibility prefix and the others do not.
+ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1"
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
+MISTRAL_BASE_URL = "https://api.mistral.ai/v1"
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 
 @dataclass(frozen=True)
@@ -48,21 +60,36 @@ PRESETS: tuple[Preset, ...] = (
     Preset("ollama-llama", "Ollama: llama3.1:8b", "llama3.1:8b", DEFAULT_BASE_URL, "none"),
     Preset("groq", "Groq (your key)", "openai/gpt-oss-20b", GROQ_BASE_URL, "own"),
     Preset("openai", "OpenAI (your key)", "gpt-4o-mini", OPENAI_BASE_URL, "own"),
+    # No model name is shipped for these four: the names change faster than this
+    # file, and a stale one fails with a message from the provider instead of
+    # from us. Type one, or read the list at <base_url>/models.
+    Preset("anthropic", "Anthropic (your key)", "", ANTHROPIC_BASE_URL, "own"),
+    Preset("gemini", "Google Gemini (your key)", "", GEMINI_BASE_URL, "own"),
+    Preset("mistral", "Mistral (your key)", "", MISTRAL_BASE_URL, "own"),
+    Preset("openrouter", "OpenRouter (your key)", "", OPENROUTER_BASE_URL, "own"),
     Preset("custom", "Custom endpoint", "", "", "own"),
 )
 
 SYSTEM_PROMPT = (
-    "You answer questions about an agronomy trial: oat varieties in the whole "
-    "plots, nitrogen rates in the subplots, replicated over blocks. Every number "
-    "you report must come from a tool call: profile the data with describe_dataset "
-    "first, then fit the model the question needs. Quote estimates with their "
-    "confidence intervals and name the tool that produced them. When a tool "
-    "returns an error, read the message and retry with corrected arguments. "
-    "Repeat a tool's notes verbatim when they warn you: an EC50 or peak outside "
-    "the tested dose range is an extrapolation, not a finding. A non-significant "
-    "p-value means the trial could not resolve the effect; check power_analysis "
-    "before saying two varieties are equal. A low achieved power means the "
-    "design is underpowered, not that there is no effect."
+    "You analyse a table the reader loaded, and you never compute a number yourself. "
+    "Every figure you report comes from a tool result, and you name the result id beside "
+    "it. Work in the order the ledger enforces: frame_question to state the estimand, "
+    "profile_table to learn the columns and the quality problems, then fit_model or "
+    "compare_groups, then sensitivity, then explain_result. Call analysis_status whenever "
+    "you are unsure what comes next, and follow its recommended_next. When a tool errors, "
+    "read the message and retry: it names the columns that exist. Repeat a tool's caveats "
+    "and cannot_say verbatim, because they are the limits of the answer. A wide interval "
+    "is not evidence of no difference, and a column recorded after the outcome is leakage, "
+    "not a predictor. Do not call a result causal unless the design stage permitted a "
+    "causal target. run_sql is for lookups and aggregates only: a claim about an effect "
+    "cites fit_model, compare_groups or sensitivity."
+)
+
+# The copy the Agent panel shows beside the key box. It has to be true.
+KEY_POLICY = (
+    "Your key is sent to this server, used for your session's requests, and held in "
+    "memory only: it is never written to disk and never logged. The values the model "
+    "reads from your table are sent to the provider you chose."
 )
 
 
@@ -102,7 +129,14 @@ def resolve(
                 "The demo preset needs AGENTIC_STATS_LLM_API_KEY set where the app "
                 "runs. Locally, pick an Ollama preset instead."
             )
-    return (model.strip() or preset.model, base_url.strip() or preset.base_url, key)
+    endpoint = base_url.strip() or preset.base_url
+    chosen = model.strip() or preset.model
+    if not chosen:
+        raise ValueError(
+            f"The {preset.label} preset needs a model name. Type one in the Model box, "
+            f"or read the list at {endpoint.rstrip('/')}/models."
+        )
+    return (chosen, endpoint, key)
 
 
 def _record_request(trace, pending, event) -> None:
@@ -136,13 +170,61 @@ def _record_result(trace, pending, event) -> None:
     trace.append(TraceEvent(name, arguments, summary, is_error))
 
 
+def _tool_display(name: str, value: dict[str, Any]) -> ToolResultDisplay | None:
+    """A card for the tools whose results read well as one, else None.
+
+    Every preview derives from the result dict with `.get()`: a missing field
+    degrades to a plainer card, never an exception.
+    """
+    try:
+        from shinychat.types import ToolResultDisplay
+    except Exception:  # pragma: no cover - defensive: shinychat may be absent
+        return None
+
+    if name == "sensitivity":
+        checks = value.get("checks") or []
+        display = ToolResultDisplay(title="Sensitivity check", open_style="framed")
+        if checks:
+            stable = sum(1 for check in checks if check.get("status") == "stable")
+            display.value_preview = f"{stable}/{len(checks)} checks stable"
+        return display
+    if name == "plot":
+        spec = ", ".join(
+            str(value.get(field))
+            for field in ("kind", "x", "y", "color", "facet")
+            if value.get(field)
+        )
+        return ToolResultDisplay(title="Plot", label=spec, open_style="framed")
+    if name == "fit_model":
+        coefficients = value.get("coefficients") or []
+        if not coefficients:
+            return ToolResultDisplay(title="Fitted model")
+        first = coefficients[0]
+        return ToolResultDisplay(
+            title="Fitted model",
+            value_preview=(
+                f"{first.get('term')}: {first.get('estimate')} "
+                f"[{first.get('ci_low')}, {first.get('ci_high')}]"
+            ),
+        )
+    return ToolResultDisplay(title=name.replace("_", " ").capitalize())
+
+
 def _as_tool(handler: Any) -> Any:
-    """Wrap a stats tool so the model gets JSON and every result has one shape."""
+    """Wrap a stats tool so the model gets JSON and every result has one shape.
+
+    The wrapper is async and runs the sync handler in a worker thread: chatlas
+    awaits async tools directly on the event loop, and without the thread a
+    slow fit_model would stall every concurrent session.
+    """
 
     @functools.wraps(handler)
-    def call(**kwargs: Any) -> ContentToolResult:
-        result = handler(**kwargs)
-        return ContentToolResult(value=result.model_dump(), model_format="json")
+    async def call(**kwargs: Any) -> ContentToolResult:
+        result = await asyncio.to_thread(handler, **kwargs)
+        value = result.model_dump()
+        display = _tool_display(getattr(handler, "__name__", ""), value)
+        extra: dict[str, Any] = {"display": display} if display is not None else {}
+        return ContentToolResult(value=value, model_format="json", extra=extra)
 
     return call
 
@@ -156,8 +238,9 @@ def build_client(
 ) -> chatlas.ChatOpenAICompletions:
     """An OpenAI-compatible client with every registered tool attached.
 
-    Pass a `trace` list and each tool call appends one `TraceEvent`, which the
-    Agent panel renders after the turn. Tool errors already reach the model:
+    Pass a `trace` list and each tool call appends one `TraceEvent`. The trace
+    list is optional diagnostics, consumed by tests and the CLI loop; the web
+    Agent panel does not read it. Tool errors already reach the model:
     chatlas converts a raising tool into an error result and feeds it back.
     """
     client = chatlas.ChatOpenAICompletions(
@@ -166,7 +249,7 @@ def build_client(
         api_key=api_key or "not-needed",
         system_prompt=system_prompt,
     )
-    for spec in registry.TOOLS:
+    for spec in registry.agent_tools():
         # name= is required: with model=, chatlas names the tool after the model,
         # and registry builds those as "<tool>Request".
         client.register_tool(_as_tool(spec.handler), name=spec.name, model=spec.input_model)

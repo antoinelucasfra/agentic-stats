@@ -1,16 +1,29 @@
-"""Playground panel server: the form, the upload, and running a tool by hand."""
+"""Playground panel server: the form, the upload, and running a tool by hand.
+
+The panel holds one session store for the life of the connection, so the ledger
+the tools read is the ledger the reader sees. An upload replaces the store,
+because new data invalidates every stage of the analysis that came before it.
+
+The ledger strip above the form is the point of the panel now. A tool that
+refuses out of order is a dead end unless the reader can see which call unblocks
+it, so `analysis_status` is rendered next to the picker rather than hidden in a
+result.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
-import pandas as pd
 from pydantic import ValidationError
 from shiny import Inputs, Outputs, Session, module, reactive, render, ui
 
-from stats import forms, registry, stats_tools, views
+from stats import forms, registry, stats_tools, views, workflow
+from stats.report import html_report
+from stats.session import use_session
 from stats.stats_tools import DatasetDescription, ToolError
+from transports import extraction
 from web.panels.playground.helpers import field_input, read_uploaded, upload_problem
 
 
@@ -20,44 +33,41 @@ def playground_server(
     output: Outputs,
     session: Session,
     pending: reactive.Value,
+    store: reactive.Value,
 ) -> None:
-    uploaded = reactive.value(None)
-
-    @reactive.calc
-    def frame() -> pd.DataFrame:
-        override = uploaded()
-        return override if override is not None else stats_tools.load_dataset()
-
-    @reactive.calc
-    def description() -> DatasetDescription:
-        with stats_tools.use_frame(frame()):
-            return stats_tools.describe_dataset()
-
     @reactive.effect
     @reactive.event(input.csv)
     def _load_upload() -> None:
         files = input.csv()
         if not files:
-            uploaded.set(None)
+            store.set(stats_tools.env_store())
             return
         info = files[0]
         problem = upload_problem(info)
         if problem:
             ui.notification_show(problem, type="error")
-            uploaded.set(None)
             return
         try:
             loaded = read_uploaded(info["datapath"])
         except Exception as exc:
             ui.notification_show(f"Could not read that file: {exc}", type="error")
-            uploaded.set(None)
             return
         if loaded.empty:
             ui.notification_show("That file has no rows.", type="error")
-            uploaded.set(None)
             return
-        uploaded.set(loaded)
-        ui.notification_show(f"Loaded {info['name']}. Run a tool to analyse it.", type="message")
+        current = store()
+        current.add_table(loaded, name="upload", source=f"upload:{info['name']}", primary=True)
+        current.reset_analysis()
+        store.set(current.refreshed())
+        ui.notification_show(
+            f"Loaded {info['name']}. Frame the question, then profile the table.",
+            type="message",
+        )
+
+    @reactive.calc
+    def description() -> DatasetDescription:
+        with use_session(store()):
+            return stats_tools.describe_dataset()
 
     @reactive.effect
     @reactive.event(pending)
@@ -94,22 +104,109 @@ def playground_server(
         try:
             raw = {field.name: input[field.name]() for field in fields}
             arguments = forms.arguments(fields, raw)
-            with stats_tools.use_frame(frame()):
-                return spec.name, spec.handler(**arguments)
+            with use_session(store()):
+                name, payload = spec.name, spec.handler(**arguments)
+            if spec.name == "load_table":
+                # The tool mutated the shared store in place, and a reactive
+                # only notices a new object. Without the replacement the form
+                # would keep offering the old table's columns.
+                store.set(store().refreshed())
+            return name, payload
         except KeyError:
             return spec.name, ToolError("The form is still loading. Try again.")
         except (ToolError, ValidationError) as exc:
             return spec.name, exc
 
+    def _ledger_strip() -> Any:
+        """The ledger as a banner, shown above every result.
+
+        It lives inside the result output rather than in its own, because a
+        second output registered ahead of `result` starves it: Shiny's flush
+        renders `ledger_view` and leaves `result` silent for that cycle.
+        """
+        status = workflow.analysis_status()
+        if status.complete:
+            return ui.div(
+                ui.tags.strong("Analysis ledger: every stage recorded."),
+                ui.tags.p(status.recommended_next),
+                class_="alert alert-success",
+            )
+        return ui.div(
+            ui.tags.strong("Analysis ledger: what is still missing"),
+            ui.tags.p(status.recommended_next),
+            ui.tags.ul(*[ui.tags.li(item) for item in status.missing]),
+            class_="alert alert-warning",
+        )
+
     @render.ui
     def result() -> Any:
         name, payload = outcome()
+        with use_session(store()):
+            strip = _ledger_strip()
         if isinstance(payload, Exception):
-            return ui.div(str(payload), class_="alert alert-danger")
+            return [strip, ui.div(str(payload), class_="alert alert-danger")]
         return [
+            strip,
             *views.full_view(name, payload),
             ui.tags.details(
                 ui.tags.summary("Raw JSON"),
                 ui.tags.pre(json.dumps(payload.model_dump(), indent=2)),
             ),
         ]
+
+    @render.download_button(filename="agentic-stats-report.html")
+    async def download_report():
+        """The session as one self-contained file: tables, ledger, findings."""
+        with use_session(store()):
+            yield html_report(store())
+
+    # --- notes to table -------------------------------------------------------
+
+    @reactive.calc
+    @reactive.event(input.extract)
+    async def extraction_outcome() -> Any:
+        """The notes as rows, or the exception to show; the house outcome shape.
+
+        Async with the extraction in a worker thread: the call is a
+        multi-second LLM request, and a sync reactive calc would run it on the
+        event loop and stall every other session.
+        """
+        try:
+            columns = [name.strip() for name in input.notes_columns().split(",")]
+            return await asyncio.to_thread(extraction.extract_columns, input.notes(), columns)
+        except Exception as exc:
+            return exc
+
+    @render.ui
+    async def notes_result() -> Any:
+        frame = await extraction_outcome()
+        if isinstance(frame, Exception):
+            return ui.div(str(frame) or type(frame).__name__, class_="alert alert-danger")
+        if frame.empty:
+            return ui.tags.p("No rows came back from the notes.", class_="text-muted")
+        coerced = frame.attrs.get("coerced") or []
+        note = (
+            ui.tags.p(
+                f"Numbers read as text were converted to numeric: {', '.join(coerced)}.",
+                class_="text-muted small",
+            )
+            if coerced
+            else None
+        )
+        table = views.table(
+            list(frame.columns),
+            frame.fillna("").values.tolist(),
+        )
+        parts: list[Any] = [table.tag]
+        if note is not None:
+            parts.insert(0, note)
+        return parts
+
+    @render.download_button(filename="extracted-notes.csv")
+    async def download_notes_csv():
+        frame = await extraction_outcome()
+        if isinstance(frame, Exception) or frame.empty:
+            ui.notification_show("Extract the notes before downloading the CSV.", type="error")
+            yield ""
+            return
+        yield frame.to_csv(index=False)

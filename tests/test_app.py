@@ -6,6 +6,8 @@ Module ids are namespaced, so the Playground's `tool` input is
 
 from __future__ import annotations
 
+from typing import Any
+
 import pandas as pd
 import pytest
 from shiny.testserver import test_server
@@ -13,6 +15,7 @@ from shiny.testserver import test_server
 from app import app
 from stats import stats_tools
 from utils.config import CARDS
+from web.panels.overview import server as overview_server
 
 TOOL = "playground-tool"
 RUN = "playground-run"
@@ -52,6 +55,31 @@ def test_overview_renders_every_card(ts):
 
         assert output.status == "ok", f"{card['id']} rendered {output.status}: {output.error}"
         assert CARD_MARKERS[card["id"]] in rendered(output)
+
+
+def test_overview_renders_an_error_card_when_the_tools_fail(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A fresh server whose first compute raises still boots, and names the fix."""
+    real_get = overview_server.registry.get
+
+    def failing_for_dataset(name: str) -> Any:
+        if name == "describe_dataset":
+            raise RuntimeError("offline")
+        return real_get(name)
+
+    monkeypatch.setattr(overview_server.registry, "get", failing_for_dataset)
+    monkeypatch.setattr(overview_server, "_CACHE", {})
+
+    with test_server(app, timeout_secs=30) as server:
+        # Flush first: outputs render in batches after an input change.
+        server.set_inputs(**{TOOL: "describe_dataset"})
+        html = rendered(server.get_output("overview-ov_dataset"))
+        assert "python -m utils.data" in html
+        assert "not loaded" in html
+        for card in CARDS:
+            card_html = rendered(server.get_output(f"overview-ov_{card['id']}"))
+            assert "python -m utils.data" in card_html
 
 
 def test_overview_dataset_value_boxes(ts):
@@ -177,3 +205,19 @@ def test_upload_rejects_anything_but_csv_or_parquet(ts, tmp_path):
 
     html = rendered(ts.get_output(RESULT))
     assert str(stats_tools.describe_dataset().n_rows) in html
+
+
+def test_data_panel_lists_the_shipped_table(ts):
+    ts.set_inputs(**{"nav": "data"})
+    html = rendered(ts.get_output("data-tables_view"))
+
+    assert "primary" in html
+    assert "72" in html
+
+
+def test_data_panel_shows_role_guesses(ts):
+    ts.set_inputs(**{"nav": "data", "data-table_pick": "primary"})
+    html = rendered(ts.get_output("data-roles_view"))
+
+    assert "grain" in html
+    assert "Apply roles" in html

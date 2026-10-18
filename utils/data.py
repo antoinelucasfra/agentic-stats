@@ -107,7 +107,7 @@ def main() -> None:
     parser.add_argument("--force", action="store_true", help="refetch even if cached")
     args = parser.parse_args()
 
-    written = fetch(args.out, force=args.force or args.out is not None)
+    written = fetch(args.out, force=args.force)
     conn = duckdb.connect()
     try:
         rows = conn.execute(

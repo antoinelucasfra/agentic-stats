@@ -17,7 +17,8 @@ from typing import Any, get_type_hints
 
 from pydantic import BaseModel, create_model
 
-from stats import stats_tools
+from rag import tools as rag_tools
+from stats import estimates, reading, stats_tools, workflow
 
 _EMPTY = inspect.Parameter.empty
 
@@ -31,13 +32,22 @@ class ToolSpec:
     handler: Callable[..., BaseModel]
     input_model: type[BaseModel]
     output_model: type[BaseModel]
+    # Where the Playground picker files it, so the workflow tools read first.
+    group: str = "Other"
+    # Whether the agent is offered it. The domain pack keeps working over MCP and
+    # in the Playground while the agent gets the smaller, ledger-aware surface.
+    agent: bool = True
 
     def input_schema(self) -> dict[str, Any]:
         """JSON Schema for the flat keyword arguments `handler` accepts."""
         return self.input_model.model_json_schema()
 
 
-def spec(handler: Callable[..., BaseModel]) -> ToolSpec:
+def spec(
+    handler: Callable[..., BaseModel],
+    group: str = "Other",
+    agent: bool = True,
+) -> ToolSpec:
     """Derive a `ToolSpec` from a function's signature, docstring and return type."""
     hints = get_type_hints(handler)
     fields: dict[str, Any] = {}
@@ -54,20 +64,58 @@ def spec(handler: Callable[..., BaseModel]) -> ToolSpec:
         handler=handler,
         input_model=create_model(f"{name}Request", **fields),
         output_model=hints["return"],
+        group=group,
+        agent=agent,
     )
 
 
+# The workflow tools come first: a weak model reads the list top down, and the
+# ledger refuses anything that skips these anyway.
+WORKFLOW = "1. Frame and profile"
+ESTIMATE = "2. Estimate"
+READING = "3. Read the result"
+DESIGN = "4. Design size"
+DOMAIN = "5. Domain pack"
+DOCS = "6. Ask the docs"
+
 TOOLS: list[ToolSpec] = [
-    spec(stats_tools.describe_dataset),
-    spec(stats_tools.fit_mixed_model),
-    spec(stats_tools.anova_effect),
-    spec(stats_tools.marginal_means),
-    spec(stats_tools.check_assumptions),
-    spec(stats_tools.power_analysis),
-    spec(stats_tools.dose_response),
-    spec(stats_tools.fit_curve_family),
-    spec(stats_tools.correlate),
+    spec(workflow.frame_question, WORKFLOW),
+    spec(workflow.profile_table, WORKFLOW),
+    spec(workflow.run_sql, WORKFLOW),
+    spec(workflow.load_table, WORKFLOW),
+    spec(workflow.analysis_status, WORKFLOW),
+    spec(estimates.fit_model, ESTIMATE),
+    spec(estimates.compare_groups, ESTIMATE),
+    spec(estimates.marginal_effects, ESTIMATE),
+    spec(estimates.sensitivity, ESTIMATE),
+    spec(reading.plot, READING),
+    spec(reading.explain_result, READING),
+    spec(stats_tools.power_analysis, DESIGN),
+    spec(stats_tools.describe_dataset, DOMAIN, agent=False),
+    spec(stats_tools.fit_mixed_model, DOMAIN, agent=False),
+    spec(stats_tools.anova_effect, DOMAIN, agent=False),
+    spec(stats_tools.marginal_means, DOMAIN, agent=False),
+    spec(stats_tools.check_assumptions, DOMAIN, agent=False),
+    spec(stats_tools.dose_response, DOMAIN),
+    spec(stats_tools.fit_curve_family, DOMAIN, agent=False),
+    spec(stats_tools.correlate, DOMAIN, agent=False),
+    spec(rag_tools.search_docs, DOCS),
+    spec(rag_tools.ask_docs, DOCS),
+    spec(rag_tools.index_documents, DOCS),
 ]
+
+
+def grouped() -> dict[str, dict[str, str]]:
+    """Tool names by group, in declaration order, for the Playground picker."""
+    groups: dict[str, dict[str, str]] = {}
+    for tool in TOOLS:
+        groups.setdefault(tool.group, {})[tool.name] = tool.name
+    return groups
+
+
+def agent_tools() -> list[ToolSpec]:
+    """The surface the chat agent is offered: the ledger-aware tools only."""
+    return [tool for tool in TOOLS if tool.agent]
 
 
 def get(name: str) -> ToolSpec:

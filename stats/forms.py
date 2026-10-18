@@ -36,7 +36,10 @@ def _unwrap(property_: dict[str, Any]) -> dict[str, Any]:
 
 
 def _kind(property_: dict[str, Any], inner: dict[str, Any]) -> FieldKind:
-    if property_.get("enum"):
+    # `Literal[...] | None` nests the enum one level down beside the null, so the
+    # choices have to be read from the unwrapped type. Reading `property_` left
+    # every optional literal as a free-text box.
+    if inner.get("enum"):
         return "enum"
     match inner.get("type"):
         case "array":
@@ -63,7 +66,7 @@ def fields_for(input_schema: dict[str, Any], model_fields: dict[str, Any]) -> li
                 name=name,
                 kind=_kind(property_, inner),
                 required=name in required,
-                choices=[str(choice) for choice in property_.get("enum", [])],
+                choices=[str(choice) for choice in inner.get("enum", [])],
                 default=default,
                 description=property_.get("description", ""),
             )

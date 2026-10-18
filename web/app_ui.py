@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from shiny import ui
 
-from utils.config import AGENT_ID, NAV_ID, OVERVIEW_ID, PLAYGROUND_ID
+from utils.config import AGENT_ID, DATA_ID, NAV_ID, OVERVIEW_ID, PLAYGROUND_ID
 from web.panels.agent import agent_ui
+from web.panels.data import data_ui
 from web.panels.overview import overview_ui
 from web.panels.playground import playground_ui
 
 app_ui = ui.page_navbar(
+    data_ui(DATA_ID),
     overview_ui(OVERVIEW_ID),
     playground_ui(PLAYGROUND_ID),
     agent_ui(AGENT_ID),

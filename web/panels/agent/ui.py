@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from shiny import module, ui
+from shinychat import chat_ui
 
 from transports import llm
 
@@ -40,7 +41,7 @@ def agent_ui() -> ui.NavPanel:
                 width=380,
                 open="always",
             ),
-            ui.card(ui.chat_ui("chat", height="70vh")),
+            ui.card(chat_ui("chat", height="70vh")),
             fillable=True,
         ),
         value="agent",

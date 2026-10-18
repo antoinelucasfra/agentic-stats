@@ -1,77 +1,75 @@
 # agentic-stats
 
-Statistical analysis of a real agronomy split-plot trial, exposed to LLM agents
+Statistical analysis of a table nobody has seen before, exposed to LLM agents
 through **MCP**, to scripts through a **CLI agent**, and to anyone with a browser
 through a **Shiny for Python** app.
 
-An agent is handed nine well-described statistical tools instead of a Python
-sandbox. It profiles the data, picks a model, and gets typed results with
-confidence intervals: no code execution and no shell in the loop.
+An agent is handed a small set of typed statistical tools instead of a Python
+sandbox. It profiles the data, states an estimand, fits a model, tries to break
+its own conclusion, and reads the result back with the caveats attached. Every
+figure it reports has to trace to a stored result, and a deterministic check
+enforces that before the answer is shown.
 
 > *"Does the oat variety matter, once we account for block-to-block variation?"*
-> The agent calls `describe_dataset`, then `fit_mixed_model`, then answers with the
-> mixed-model estimate, its 95% CI, and the block variance component.
+> The agent calls `frame_question`, then `profile_table`, then `fit_model`, then
+> `sensitivity`, and answers with the mixed-model estimate, its 95% CI, the block
+> variance component, and the share of robustness checks that survived.
 
 ## Why this shape
 
-- **Tools, not a code interpreter.** `fit_mixed_model(response, fixed_effects, group)`
-  is a bounded, typed operation. The agent cannot write arbitrary code, cannot touch
-  the filesystem, and gets a validation error it can act on instead of a stack trace.
-- **One registry, three transports.** `stats/registry.py` derives each tool's JSON Schema
-  from the function's signature and docstring. The MCP server, the CLI agent and the
-  Shiny app all read that one list, so they cannot drift apart.
-- **Statistics that survives review.** Mixed models, marginal means, assumption checks,
-  power, and dose response, computed by `statsmodels` and `scipy`, not reimplemented.
-- **One implementation.** The Shiny app imports `stats.stats_tools` directly, so the
-  numbers on the page are the numbers the tests cover. There is no second
-  implementation and no statistics in JavaScript.
-- **Real data, fetched not committed.** `utils/data.py` pulls the trial from Rdatasets
-  over HTTPS and writes a parquet cache with `duckdb`; the repository carries no
-  dataset. The Agent tab is the only part that needs an endpoint.
+- **Tools, not a code interpreter.** `fit_model(response, terms, group=...)` is a
+  bounded, typed operation. The agent cannot write arbitrary code, cannot touch
+  the filesystem, and gets a validation error it can act on instead of a stack
+  trace.
+- **One registry, three transports.** `stats/registry.py` derives each tool's
+  JSON Schema from the function's signature and docstring. The MCP server, the
+  CLI agent and the Shiny app all read that one list, so they cannot drift apart.
+  23 tools are registered; the chat agent is offered 16, because the domain pack
+  and the ledger-aware surface should not compete for a small model's attention.
+- **A ledger, not a prompt.** Six stages, in order, each written by the tool that
+  establishes it. A fit cannot be interpreted before its assumptions were
+  checked, and `analysis_status` reports what is still missing. The sequencing
+  lives in Python because a 7B model cannot be trusted to remember it.
+- **Statistics that survives review.** Mixed models, marginal means, GLM,
+  assumption verdicts with named remedies, and a sensitivity stage, computed by
+  `statsmodels` and `scipy`, not reimplemented.
+- **One implementation.** The Shiny app imports the same tools, so the numbers on
+  the page are the numbers the tests cover. There is no second implementation and
+  no statistics in JavaScript.
+- **Honest about its own approximations.** Where a weaker method stands in for a
+  stronger one, the result says so. See *Known approximations* in
+  [docs/analysis-tools.md](docs/analysis-tools.md).
 
-## Architecture
+## The ledger
 
-```
-                        ┌──────────────────────────────┐
-                        │  stats/stats_tools.py        │
-                        │  pure functions              │
-                        └──────────────┬───────────────┘
-                                       │
-                        ┌──────────────▼───────────────┐
-                        │  stats/registry.py           │
-                        │  name · JSON Schema · output │
-                        └───┬──────────┬───────────┬───┘
-                            │          │           │
-              ┌─────────────▼──┐  ┌────▼──────┐  ┌─▼──────────────────────┐
-              │ transports/    │  │ transports│  │ app.py                 │
-              │ mcp_server.py  │  │ /agent.py │  │ web/app_ui.py          │
-              │ stdio, 9 tools │  │ CLI loop  │  │ web/panels/overview    │
-              └────────────────┘  └───────────┘  │ web/panels/playground  │
-                                                 │ web/panels/agent       │
-                                                 └────────────────────────┘
-```
+| Stage | Established by | Blocks |
+| --- | --- | --- |
+| design | `frame_question` | Everything except `run_sql` |
+| quality | `profile_table` | Inference when a blocking issue stands |
+| assumptions | `fit_model`, `compare_groups` | Interpretation |
+| estimate | `fit_model`, `compare_groups`, `marginal_effects` | Interpretation |
+| sensitivity | `sensitivity` | Publication of a conclusion |
+| interpretation | `explain_result` | The report |
 
-`app.py` does one thing: `App(app_ui, server)`. `web/app_ui.py` builds the navbar and
-`web/server.py` is the root server. Each panel is a Shiny module under
-`web/panels/`, so its inputs are namespaced (`playground-tool`) and two panels cannot
-collide. The only cross-panel state is a `pending` value created in `web/server.py`:
-the Overview writes a card's tool and arguments into it, the Playground selects that
-tool, and `web/server.py` switches the navbar, because a module cannot address
-another module's inputs and the navbar belongs to the root.
+A descriptive reading, a query or a chart, needs the design and quality stages
+only. An inferential one needs the whole chain, including sensitivity.
 
 ## What the tools answer
 
-| Tool | Arguments | Answers |
-| --- | --- | --- |
-| `describe_dataset` | `()` | Columns, dtypes, missing values, ranges; which are factors, which numeric |
-| `fit_mixed_model` | `(response, fixed_effects, group="block")` | REML fixed effects with 95% CIs, variance components, ICC |
-| `anova_effect` | `(response, factor)` | F-test, p-value, omega-squared, partial eta-squared, Levene |
-| `marginal_means` | `(response, factors, covariates=None, group=None, …)` | Average predicted mean per level with CIs, plus pairwise contrasts |
-| `check_assumptions` | `(response, fixed_effects, group=None, …)` | Residual normality, Breusch-Pagan, Levene, VIF, Cook's distance, QQ data |
-| `power_analysis` | `(response, factor, alpha=0.05, target_power=0.8, …)` | Power achieved, smallest detectable effect, rows needed per level |
-| `dose_response` | `(response, dose, model="4pl", by=None)` | Four-parameter logistic or quadratic fit, EC50 or peak with a CI, predicted curve |
-| `fit_curve_family` | `(response, dose, by=None)` | Linear, quadratic and 4PL on the same rows, ranked by AIC with ΔAIC |
-| `correlate` | `(columns=None)` | Pearson and Spearman matrices over the numeric columns, strongest pair named |
+Sixteen tools on the agent surface, in ledger order: `frame_question`,
+`profile_table`, `run_sql`, `load_table`, `analysis_status`, `fit_model`,
+`compare_groups`, `marginal_effects`, `sensitivity`, `plot`, `explain_result`,
+plus `power_analysis` and `dose_response`. Arguments, guarantees and refusal
+rules for each: [docs/analysis-tools.md](docs/analysis-tools.md).
+
+Seven more tools, the domain pack (`describe_dataset`, `fit_mixed_model`,
+`anova_effect`, `marginal_means`, `check_assumptions`, `fit_curve_family`,
+`correlate`), stay callable over MCP and in the Playground but are not offered to
+the chat agent.
+
+Three docs tools, the "Ask the docs" group (`search_docs`, `ask_docs`,
+`index_documents`), are offered to the chat agent too. They are non-inferential:
+they write no ledger stage and require none.
 
 Tool errors are written for a model to recover from:
 
@@ -79,12 +77,13 @@ Tool errors are written for a model to recover from:
 Unknown column(s): ['nitrogen_rate']. Available columns: ['block', 'variety', 'grain', 'nitrogen']
 ```
 
-The Shiny Playground shows the same message inline, and in the Agent tab the model
-reads the error and retries with corrected arguments. One behaviour, three transports.
+The Playground shows the same message inline, and in the Agent tab the model
+reads the error and retries with corrected arguments. One behaviour, three
+transports.
 
 ## The dataset
 
-Nothing is committed. `data.py` downloads the oats split-plot trial from
+Nothing is committed. `utils/data.py` downloads the oats split-plot trial from
 Rdatasets and converts it to parquet with `duckdb` on first use, so a fresh
 clone, a wheel, and a deployed app all carry the same 72 rows without a dataset
 in the repository.
@@ -97,7 +96,7 @@ Bates (2000) analyse it in *Mixed-Effects Models in S and S-PLUS*.
 | Column | Role |
 | --- | --- |
 | `block` | random-effect group, six levels |
-| `variety` | whole-plot factor, three levels, contrasts |
+| `variety` | whole-plot factor, three levels |
 | `grain` | response, numeric |
 | `nitrogen` | subplot covariate and dose, four levels |
 
@@ -136,7 +135,7 @@ power card and the variety card both say the design cannot settle it.
 ```bash
 uv sync --all-extras --all-groups      # Python 3.12+, deps resolved and locked
 uv run python -m utils.data            # fetch the trial into the parquet cache
-uv run --all-extras pytest -q          # 91 tests, no network needed
+uv run --all-extras pytest -q          # 306 tests, no network needed
 
 uv run shiny run --host 127.0.0.1 --port 8766 app.py   # the Shiny app
 uv run python app.py                   # same app, host and port from
@@ -147,8 +146,8 @@ The stats core needs no web server, so Shiny and the chat client live in extras.
 `--all-extras` is what makes the app, the MCP server and the CLI runnable; a bare
 `uv run` syncs the core and the dev group only.
 
-The Agent tab needs a reachable
-OpenAI-compatible endpoint; Overview and Playground do not.
+The Agent tab needs a reachable OpenAI-compatible endpoint; Overview and
+Playground do not.
 
 Ask a question with any OpenAI-compatible endpoint, Ollama by default:
 
@@ -164,28 +163,56 @@ uv run python -m transports.mcp_server   # the same tools over stdio, for any MC
 uv run shiny run --host 127.0.0.1 --port 8766 app.py
 ```
 
-Three panels, one page:
+Three panels, one page, plus the data that feeds them:
 
+- **Data** loads a table three ways: a public URL through the fetch guard, the
+  catalog search over a curated list plus the cached Rdatasets index, and the
+  shipped trial. Many tables can live in one session with a primary switch, and
+  the panel shows what the profile guessed for each column, with its reason, so
+  a reader who knows the data can confirm the roles once instead of correcting
+  every tool call.
 - **Overview** answers six questions from the fetched trial, computed once when the
   process starts. Every card has an *Open in playground* button that carries the tool
   and its arguments across.
 - **Playground** builds its form from `registry`, so a tool added in Python appears
-  with no UI change. It runs the tool in the server process against the cached
-  parquet or one you upload, and renders results with the same functions the
-  Overview cards use. Uploads are read from the temp file Shiny writes, capped at
-  5 MB, and never written to disk; CSV and parquet both work.
-- **Agent** is a chat over the same nine tools: `chatlas` with
-  `ChatOpenAICompletions`, so Ollama, vLLM, LM Studio, Groq and OpenAI all work.
-  A preset select fills model and endpoint: Demo (no key needed) runs on the
-  server's `AGENTIC_STATS_LLM_API_KEY`, the Ollama presets need nothing local,
-  and the rest take the key you type, kept in server memory for that session.
-  Every tool call lands in the transcript as `tool(args)` with a one-line result,
-  so you watch the model work.
+  with no UI change. It runs the tool in the server process against the session's
+  primary table, renders results with the renderers the Overview cards
+  use, and shows the ledger as a banner above every result: what is missing, and
+  which call closes it. Uploads are read from the temp file Shiny writes, capped at
+  5 MB, and never written to disk; CSV and parquet both work. A download button
+  exports the session, tables, ledger and findings, as one self-contained HTML file.
+- **Agent** is a chat over the sixteen ledger-aware tools: `chatlas` with
+  `ChatOpenAICompletions`, so Ollama, vLLM, LM Studio, Groq, OpenAI, Anthropic,
+  Gemini, Mistral and OpenRouter all work through one client. A preset select fills
+  model and endpoint; the four newest providers ship no model name, because those
+  names move faster than this repository, and the tool says so and points at the
+  provider's model list. Your key stays in server memory for that session, is never
+  written to disk and never logged, and the values the model reads from your table
+  are sent to the provider you chose. Every tool call lands in the transcript as
+  `tool(args)` with a one-line result, so you watch the model work. The finished
+  text of every turn goes through the verify pass: a figure with no stored result,
+  an effect claim resting on a descriptive one, or causal language without a causal
+  design lands in the transcript as a warning. Twenty turns is the session budget,
+  and three slow streams is the instance budget: the twenty-first turn and the
+  fourth concurrent one are refused with a message, not queued.
 
 Charts are plotnine figures encoded as inline PNGs, so tables and charts come from the
-same result objects on every surface. An uploaded table is scoped to its session through
-a `contextvars` override in `stats.stats_tools.use_frame`, so one reader's file never
-changes another reader's numbers.
+same result objects on every surface. Each connection gets its own session store, so
+one reader's file, result ids and ledger never touch another's.
+
+## What is not done yet
+
+The rework is largely landed, and [docs/analysis-tools.md](docs/analysis-tools.md)
+carries the status table. What remains is polish, not structure:
+
+- No visible plan checklist. `frame_question` returns the ordered calls and the
+  ledger banner names the next one, but there is no checklist panel yet.
+- The agent's memory of past findings is the chat history. A findings panel that
+  survives across turns would make long analyses easier to follow.
+- The eval harness runs scripted cases only. A live-model variant, env-gated like
+  the benchmark's, would measure the system end to end.
+- No per-IP rate limiting. The turn budget and the concurrency cap protect a demo,
+  and anything stricter wants an auth story first.
 
 ## Hosting on Posit Connect Cloud
 
@@ -200,7 +227,6 @@ uv export --no-dev --format requirements-txt --no-hashes --no-header --extra app
 ```
 
 `--no-dev` keeps the dev group out, so Connect Cloud does not install pytest and ruff.
-
 CI regenerates it and diffs it against the committed copy, so a dependency change that
 was not exported fails the build. The file lists dependencies only: there is no `.`
 line, because the app is not a package and Connect Cloud runs `app.py` from the
@@ -221,14 +247,11 @@ secret variables rather than in the repo:
 | `AGENTIC_STATS_LLM_MODEL` | the model name |
 | `AGENTIC_STATS_LLM_API_KEY` | the key; a free Groq key makes the Demo preset work with no typing |
 
-Republish on push is on by default, which replaces the GitHub Pages job that used to
-deploy this. On the first deploy, check that Overview and Playground answer without an
-endpoint configured, since only the Agent tab needs one.
+Republish on push is on by default. On the first deploy, check that Overview and
+Playground answer without an endpoint configured, since only the Agent tab needs one.
 
 Usage is metered while the app is active, roughly 11 hours a month at 1 CPU and 4 GB
-from the 20 free credits. Free content is public, so a reader either uses the key you
-set as a secret or types their own into the Agent tab's key field, which stays in server
-memory for that session.
+from the 20 free credits.
 
 ## Releases
 
@@ -237,44 +260,62 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org), and
 hand: nothing is published automatically and no container image is built.
 
 CI runs one job: ruff, then pytest. The suite covers the statistics, the registry, the
-MCP surface, the CLI agent loop, a scripted eight-question agent benchmark, and the app itself through Shiny's in-memory test
-server, so no browser and no network are needed: `tests/conftest.py` points every tool
-at the 72-row fixture in `tests/fixtures/`. The same job pre-warms the parquet cache,
-regenerates `requirements.txt` from `uv.lock`, fails if the two disagree, then
-pip-installs it into a clean venv and imports the app, which is the path a Connect Cloud
-deploy takes.
+MCP surface, the CLI agent loop, a scripted eight-question agent benchmark, the session
+store and the ledger, the role inference, the fetch and SQL guards, the reading tools,
+the verify pass, and the app itself through Shiny's in-memory test server, so no browser
+and no network are needed: `tests/conftest.py` points every tool at the 72-row fixture in
+`tests/fixtures/`. The same job pre-warms the parquet cache, regenerates
+`requirements.txt` from `uv.lock`, fails if the two disagree, then pip-installs it into a
+clean venv and imports the app, which is the path a Connect Cloud deploy takes.
 
 ## Layout
 
 ```
 app.py                 entry point: App(app_ui, server), and `python app.py`
 
+docs/
+  analysis-tools.md    the tool contract: what each tool guarantees, and its limits
+
 web/                   everything Shiny
   app_ui.py            the navbar, assembling one module per panel
   server.py            the root server, and the only shared state between panels
   panels/
     overview/          ui.py, server.py: the six cards, computed at import
-    playground/        ui.py, server.py, helpers.py: tool picker, form, upload
-    agent/             ui.py, server.py: chatlas client with the tools attached
+    data/              ui.py, server.py: import by URL or catalog, tables, roles
+    playground/        ui.py, server.py, helpers.py: tool picker, form, upload, ledger
+    agent/             ui.py, server.py: chatlas client, shared store, verify, budgets
 
-stats/                 the statistics, transport-agnostic
-  stats_tools.py       pure statistical functions + pydantic result models
-  registry.py          derives each tool's schema from its function signature
-  views.py             one renderer per tool: metrics, charts, tables, notes
+stats/                 the statistics and the workflow, transport-agnostic
+  session.py           tables, results, the six-stage ledger, quotable numbers
+  errors.py            ToolError, shared by the store and the tools
+  roles.py             column roles, guessed with a reason and a confidence
+  workflow.py          frame_question, profile_table, run_sql, load_table, analysis_status
+  estimates.py         fit_model, compare_groups, marginal_effects, sensitivity
+  reading.py           plot, explain_result
+  verify.py            the check that a figure exists in a stored result
+  report.py            the session as self-contained Markdown or HTML
+  stats_tools.py       the domain pack: pure statistical functions and result models
+  registry.py          derives each tool's schema from its signature; groups and the agent surface
+  views.py             one renderer per tool: metrics, charts, tables, verdicts
   charts.py            plotnine figures, encoded as inline PNGs
   forms.py             JSON Schema to form fields, and field values back to arguments
 
 transports/            one module per way of calling the tools
   mcp_server.py        MCPServer over stdio, built from the registry
   agent.py             CLI tool-calling loop + OpenAI-compatible backend
-  llm.py               chatlas client with the registry tools attached
+  llm.py               chatlas client, provider presets, the system prompt
 
 utils/
   config.py            constants, paths, the card definitions, panel ids
   data.py              fetch + parquet cache for the oats split-plot trial
+  fetch.py             safe fetch for a public URL: SSRF guard, byte cap, format check
+  catalog.py           the curated list and the cached Rdatasets index
+  duck.py              locked-down duckdb: external access off, SELECT only, row and time caps
   formatting.py        number and p-value formatting
 
-tests/                 tools, registry, MCP wiring, agent loop, app, views, forms
+tests/                 tools, registry, MCP wiring, agent loop, app, session, ledger,
+                       roles, reading, verify, report, fetch and SQL guards, catalog,
+                       eval harness
 ```
 
 Only `app.py` sits at the root, because `shiny run app.py` needs it there.
@@ -285,22 +326,19 @@ lists dependencies only.
 
 ## Limitations (deliberate)
 
-- One dataset, one design. Swap it with `AGENTIC_STATS_DATA`, but the tools assume a
-  response column, a categorical factor, a numeric dose and a grouping column.
+- The shipped demo is one dataset and one design. The tools no longer assume it,
+  but the Overview cards and the sanity numbers do.
 - Real data, small trial. 72 rows and six blocks is what Yates ran in 1935, so the
   variety effect is genuinely underpowered here; that is the demo, not a defect.
-- The app fetches the dataset on first use. Offline, without `AGENTIC_STATS_DATA`,
-  `describe_dataset` fails with a message naming the fetch command.
-- No auth, no rate limiting, no queueing. The demo is a demo, and the Agent tab can
-  be pointed at any OpenAI-compatible endpoint from the sidebar, so do not host it
-  publicly without gating that.
-- The Agent tab needs a reachable endpoint. Bigger models are better at choosing
-  tools, but they are still choosing tools, not doing statistics.
-- An uploaded table runs against whatever columns it has; the tools report unknown
-  columns the same way they do for the fetched trial.
+- `run_sql` can compute a difference of means, and that number is descriptive.
+  The verify pass refuses an effect claim that rests on one, but a reader who
+  ignores the tag can still read it as a finding.
 - Four nitrogen levels are the whole dose range. The 4PL fits, but the EC50 it prints
   for Marvellous (6.0) sits far outside 0 to 0.6, and the quadratic peak is reported
   as an extrapolation: with four doses, treat both as shape, not as potency.
+- `compare_groups` is the weakest tool in the set: no rank-based post-hoc for more
+  than two groups, and the contrasts beside a Kruskal-Wallis test are mean-based.
+  The result says so. See *Known approximations*.
 
 ## License
 

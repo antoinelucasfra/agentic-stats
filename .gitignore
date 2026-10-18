@@ -8,3 +8,5 @@ build/
 *.egg-info/
 .env
 .DS_Store
+
+TODO.md
