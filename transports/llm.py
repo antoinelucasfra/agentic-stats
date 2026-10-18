@@ -10,12 +10,15 @@ from __future__ import annotations
 import functools
 import os
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import chatlas
 from chatlas import ContentToolResult
 
 from stats import registry
+
+if TYPE_CHECKING:
+    from shinychat.types import ToolResultDisplay
 
 DEFAULT_BASE_URL = "http://127.0.0.1:11434/v1"
 DEFAULT_MODEL = "qwen2.5:7b"
@@ -166,13 +169,56 @@ def _record_result(trace, pending, event) -> None:
     trace.append(TraceEvent(name, arguments, summary, is_error))
 
 
+def _tool_display(name: str, value: dict[str, Any]) -> ToolResultDisplay | None:
+    """A card for the tools whose results read well as one, else None.
+
+    Every preview derives from the result dict with `.get()`: a missing field
+    degrades to a plainer card, never an exception.
+    """
+    try:
+        from shinychat.types import ToolResultDisplay
+    except Exception:  # pragma: no cover - defensive: shinychat may be absent
+        return None
+
+    if name == "sensitivity":
+        checks = value.get("checks") or []
+        display = ToolResultDisplay(title="Sensitivity check", open_style="framed")
+        if checks:
+            stable = sum(1 for check in checks if check.get("status") == "stable")
+            display.value_preview = f"{stable}/{len(checks)} checks stable"
+        return display
+    if name == "plot":
+        spec = ", ".join(
+            str(value.get(field))
+            for field in ("kind", "x", "y", "color", "facet")
+            if value.get(field)
+        )
+        return ToolResultDisplay(title="Plot", label=spec, open_style="framed")
+    if name == "fit_model":
+        coefficients = value.get("coefficients") or []
+        if not coefficients:
+            return ToolResultDisplay(title="Fitted model")
+        first = coefficients[0]
+        return ToolResultDisplay(
+            title="Fitted model",
+            value_preview=(
+                f"{first.get('term')}: {first.get('estimate')} "
+                f"[{first.get('ci_low')}, {first.get('ci_high')}]"
+            ),
+        )
+    return ToolResultDisplay(title=name.replace("_", " ").capitalize())
+
+
 def _as_tool(handler: Any) -> Any:
     """Wrap a stats tool so the model gets JSON and every result has one shape."""
 
     @functools.wraps(handler)
     def call(**kwargs: Any) -> ContentToolResult:
         result = handler(**kwargs)
-        return ContentToolResult(value=result.model_dump(), model_format="json")
+        value = result.model_dump()
+        display = _tool_display(getattr(handler, "__name__", ""), value)
+        extra: dict[str, Any] = {"display": display} if display is not None else {}
+        return ContentToolResult(value=value, model_format="json", extra=extra)
 
     return call
 

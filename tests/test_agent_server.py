@@ -1,14 +1,23 @@
-"""The agent panel's guards: a turn budget and a concurrency cap.
+"""The agent panel's guards, verify summary, and tool cards.
 
 A public instance cannot let one conversation run forever or three slow streams
-starve it. Both guards are plain Python around the turn, so they are tested
-without a model and without a browser.
+starve it, and every tool result has to carry its display card. All of that is
+plain Python around the turn, so it is tested without a model and without a
+browser.
 """
 
 from __future__ import annotations
 
 import asyncio
+import re
+from typing import Any
 
+import pytest
+from chatlas import ContentToolResult
+
+from stats import verify
+from stats.session import SessionStore
+from transports import llm
 from web.panels.agent import server as agent_server
 
 
@@ -28,3 +37,190 @@ def test_slots_refuse_rather_than_queue():
 def test_the_budget_and_the_cap_are_named_constants():
     assert agent_server.TURNS_PER_SESSION == 20
     assert agent_server.MAX_CONCURRENT_TURNS == 3
+
+
+class _FakeClient:
+    """Stands in for the chatlas client: records what shinychat would pass."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    async def stream_async(self, user_input: str, *contents: Any, **kwargs: Any) -> Any:
+        # Same shape as chatlas: a coroutine returning the async iterable.
+        self.calls.append(((user_input, *contents), kwargs))
+
+        async def stream() -> Any:
+            yield "a"
+            yield "b"
+
+        return stream()
+
+
+def _guarded(inner: _FakeClient, turns: int = 0) -> agent_server.GuardedClient:
+    return agent_server.GuardedClient(
+        inner, {"turns": turns, "key": None, "trace": []}, SessionStore
+    )
+
+
+@pytest.fixture(autouse=True)
+def fresh_slots():
+    """The module semaphore binds to one loop; give each test its own."""
+    agent_server._SLOTS = asyncio.Semaphore(agent_server.MAX_CONCURRENT_TURNS)
+    yield
+
+
+async def _drain(response: Any) -> list[Any]:
+    return [chunk async for chunk in response]
+
+
+def test_guard_refuses_when_slots_are_busy():
+    async def main() -> None:
+        inner = _FakeClient()
+        guarded = _guarded(inner)
+        for _ in range(agent_server.MAX_CONCURRENT_TURNS):
+            await agent_server._SLOTS.acquire()
+        with pytest.raises(ValueError, match=re.escape(agent_server.SLOT_BUSY)):
+            await guarded.stream_async("hello", content="all")
+        agent_server._SLOTS.release()
+
+    asyncio.run(main())
+
+
+def test_guard_refuses_on_budget_overrun_and_frees_the_slot():
+    async def main() -> None:
+        inner = _FakeClient()
+        guarded = _guarded(inner, turns=agent_server.TURNS_PER_SESSION)
+        with pytest.raises(ValueError, match=re.escape(agent_server.TURN_BUDGET)):
+            await guarded.stream_async("hello", content="all")
+        # The refused turn must not hold its slot.
+        assert await agent_server._take_slot() is True
+        agent_server._SLOTS.release()
+
+    asyncio.run(main())
+
+
+def test_guard_forwards_the_stream_and_releases_the_slot():
+    async def main() -> None:
+        inner = _FakeClient()
+        state = {"turns": 0, "key": None, "trace": []}
+        guarded = agent_server.GuardedClient(inner, state, SessionStore)
+        response = await guarded.stream_async("hello", content="all")
+        assert await _drain(response) == ["a", "b"]
+        assert inner.calls == [(("hello",), {"content": "all"})]
+        assert state["turns"] == 1
+        # The slot is held while the stream is consumed, freed afterwards.
+        assert await agent_server._take_slot() is True
+        agent_server._SLOTS.release()
+
+    asyncio.run(main())
+
+
+def test_the_budget_counter_survives_a_client_rebuild():
+    async def main() -> None:
+        state: dict[str, Any] = {"turns": 0, "key": None, "trace": []}
+        first = agent_server.GuardedClient(_FakeClient(), state, SessionStore)
+        second = agent_server.GuardedClient(_FakeClient(), state, SessionStore)
+        first._state["turns"] = agent_server.TURNS_PER_SESSION
+        with pytest.raises(ValueError):
+            await second.stream_async("hello", content="all")
+
+    asyncio.run(main())
+
+
+def test_verify_message_is_verdict_statement_notes():
+    report = verify.VerificationReport(
+        verdict="review",
+        statement="2 figures traced to stored results, 1 did not.",
+        notes=["Ungrounded figures: ['7.2']. Quote a stored value."],
+    )
+    message = agent_server._verify_message(report)
+    assert message.splitlines()[0] == "⚠️ Verify: 2 figures traced to stored results, 1 did not."
+    assert message.splitlines()[1] == "- Ungrounded figures: ['7.2']. Quote a stored value."
+    clean = agent_server._verify_message(
+        verify.VerificationReport(verdict="clean", statement="1 figure traced to stored results.")
+    )
+    assert clean.startswith("✅ Verify:")
+
+
+def _tool_extra(handler: Any, **kwargs: Any) -> ContentToolResult:
+    return llm._as_tool(handler)(**kwargs)
+
+
+def test_sensitivity_result_carries_a_framed_card():
+    def sensitivity(result_id: str) -> Any:
+        class _R:
+            def model_dump(self) -> dict[str, Any]:
+                return {
+                    "checks": [{"status": "stable"}, {"status": "flipped"}, {"status": "stable"}],
+                    "stable_share": 0.6667,
+                }
+
+        return _R()
+
+    extra = _tool_extra(sensitivity, result_id="r1").extra
+    display = extra["display"]
+    assert display.title == "Sensitivity check"
+    assert display.value_preview == "2/3 checks stable"
+    assert display.open_style == "framed"
+
+
+def test_plot_result_carries_a_spec_label():
+    def plot(kind: str, x: str, y: str) -> Any:
+        class _R:
+            def model_dump(self) -> dict[str, Any]:
+                return {"kind": "box", "x": "variety", "y": "height", "color": None}
+
+        return _R()
+
+    display = llm._as_tool(plot)(kind="box", x="variety", y="height").extra["display"]
+    assert display.title == "Plot"
+    assert display.label == "box, variety, height"
+    assert display.open_style == "framed"
+
+
+def test_fit_model_result_previews_the_first_estimate():
+    def fit_model(result_id: str) -> Any:
+        class _R:
+            def model_dump(self) -> dict[str, Any]:
+                return {
+                    "coefficients": [
+                        {
+                            "term": "varietyGoldenRain",
+                            "estimate": 1.2,
+                            "ci_low": 0.4,
+                            "ci_high": 2.0,
+                        }
+                    ]
+                }
+
+        return _R()
+
+    display = _tool_extra(fit_model, result_id="r1").extra["display"]
+    assert display.title == "Fitted model"
+    assert display.value_preview == "varietyGoldenRain: 1.2 [0.4, 2.0]"
+
+
+def test_unknown_tools_get_a_plain_titled_card():
+    def analysis_status() -> Any:
+        class _R:
+            def model_dump(self) -> dict[str, Any]:
+                return {"complete": True}
+
+        return _R()
+
+    display = _tool_extra(analysis_status).extra["display"]
+    assert display.title == "Analysis status"
+    assert display.value_preview is None
+
+
+def test_a_result_without_the_expected_fields_degrades_quietly():
+    def sensitivity(result_id: str) -> Any:
+        class _R:
+            def model_dump(self) -> dict[str, Any]:
+                return {}
+
+        return _R()
+
+    display = _tool_extra(sensitivity, result_id="r1").extra["display"]
+    assert display.title == "Sensitivity check"
+    assert display.value_preview is None
