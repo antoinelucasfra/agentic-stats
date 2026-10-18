@@ -18,6 +18,10 @@ from pathlib import Path
 # reads whole on one side.
 TARGET = 500
 OVERLAP = 0.15
+# A paragraph longer than this is hard-split before packing: a multi-megabyte
+# single line (a one-row CSV upload) must never become one giant chunk, or the
+# embedder request fails for the whole upload.
+MAX_PARAGRAPH = 4000
 
 _HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
 
@@ -86,26 +90,56 @@ def chunk_markdown(text: str, source: str) -> list[Chunk]:
 def _pack(paragraphs: list[str]) -> list[str]:
     """Greedily pack paragraphs up to TARGET, overlapping by the tail of the last.
 
-    A single paragraph longer than TARGET stays whole: splitting mid-paragraph
-    loses the sentence, which matters more than the size budget.
+    A single paragraph longer than TARGET stays whole up to MAX_PARAGRAPH:
+    splitting mid-paragraph loses the sentence, which matters more than the
+    size budget. Past MAX_PARAGRAPH the size wins and the paragraph is
+    hard-split into cap-sized pieces first.
+
+    A buffer holding only a carried overlap never flushes on its own:
+    it would become a chunk with no new content in it.
     """
+    paragraphs = [
+        piece
+        for paragraph in paragraphs
+        for piece in ([paragraph] if len(paragraph) <= MAX_PARAGRAPH else _hard_split(paragraph))
+    ]
     packed: list[str] = []
     buffer: list[str] = []
+    carried = False  # buffer[0] is a carried overlap, not fresh content
 
     def flush() -> None:
-        if buffer:
+        if buffer and not carried:
             packed.append("\n\n".join(buffer))
 
     for paragraph in paragraphs:
         current = len("\n\n".join(buffer))
-        # A buffer holding only a carried overlap never flushes on its own:
-        # it would become a chunk with no new content in it.
-        if buffer and current + len(paragraph) > TARGET and current > len(buffer[0]):
+        # An overlap never justifies breaking the hard cap: drop it instead.
+        if carried and current + len(paragraph) > MAX_PARAGRAPH:
+            buffer, carried, current = [], False, 0
+        if buffer and not carried and current + len(paragraph) > TARGET:
             flush()
-            buffer = [_tail(buffer[-1])]
+            tail = _tail(buffer[-1])
+            carried = len(tail) + 2 + len(paragraph) <= MAX_PARAGRAPH
+            buffer = [tail] if carried else []
+            current = len("\n\n".join(buffer))
         buffer.append(paragraph)
+        carried = False
     flush()
     return packed
+
+
+def _hard_split(text: str) -> list[str]:
+    """Cut a monster paragraph into MAX_PARAGRAPH-sized pieces, on a word boundary."""
+    pieces: list[str] = []
+    while len(text) > MAX_PARAGRAPH:
+        cut = text.rfind(" ", 0, MAX_PARAGRAPH + 1)
+        if cut == -1:
+            cut = MAX_PARAGRAPH  # no space in the window: cut mid-word
+        pieces.append(text[:cut].strip())
+        text = text[cut:].lstrip()
+    if text:
+        pieces.append(text)
+    return pieces
 
 
 def _tail(text: str, size: int = int(TARGET * OVERLAP)) -> str:

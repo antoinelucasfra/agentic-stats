@@ -130,7 +130,9 @@ def save_index(index: DocIndex, path: Path | str) -> Path:
         "built": index.built,
     }
     sidecar = path.with_suffix(path.suffix + ".meta.json")
-    sidecar.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    sidecar_staging = sidecar.with_suffix(".tmp")
+    sidecar_staging.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    os.replace(sidecar_staging, sidecar)
     return path
 
 
@@ -169,7 +171,10 @@ def corpus_index_path() -> Path:
 
 def corpus_docs() -> list[Document]:
     """The vendored book corpus, sorted so the index is reproducible."""
-    corpus = Path(os.environ.get("AGENTIC_STATS_DOCS_DIR", "docs/corpus"))
+    # Anchor the default to the repo root, not the cwd: the MCP transport
+    # spawns the server with cwd=transports/, where a relative path reads empty.
+    default = Path(__file__).resolve().parents[1] / "docs" / "corpus"
+    corpus = Path(os.environ.get("AGENTIC_STATS_DOCS_DIR") or default)
     return [
         Document(source=page.name, text=page.read_text(encoding="utf-8"))
         for page in sorted(corpus.glob("*.md"))

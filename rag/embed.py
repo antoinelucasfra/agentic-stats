@@ -13,6 +13,7 @@ keeps the tool offline. `resolve()` picks one from the environment:
 
 from __future__ import annotations
 
+import functools
 import os
 from collections.abc import Callable
 
@@ -93,4 +94,23 @@ def resolve() -> EmbedFn:
             or os.environ.get("AGENTIC_STATS_LLM_API_KEY")
         )
         backend = "presets" if has_key else "local"
-    return presets_embed() if backend == "presets" else local_embed()
+    # resolve() reads the env on every call, but the built backend (and its
+    # httpx.Client) is memoised per configuration: one process, one client.
+    return _resolved(
+        backend,
+        os.environ.get("AGENTIC_STATS_EMBED_BASE_URL", ""),
+        os.environ.get("AGENTIC_STATS_EMBED_MODEL", ""),
+        os.environ.get("AGENTIC_STATS_EMBED_API_KEY")
+        or os.environ.get("AGENTIC_STATS_LLM_API_KEY")
+        or "",
+    )
+
+
+@functools.cache
+def _resolved(backend: str, base_url: str, model: str, api_key: str) -> EmbedFn:
+    """Build (once) the backend for one configuration; see resolve()."""
+    if backend == "presets":
+        return presets_embed(
+            base_url=base_url or None, model=model or None, api_key=api_key or None
+        )
+    return local_embed()

@@ -83,6 +83,21 @@ def test_chunks_hit_the_size_target_and_overlap():
     assert first_body[-40:] in chunks[1].text
 
 
+def test_a_giant_single_paragraph_is_hard_split_under_the_cap():
+    words = [f"word{i}" for i in range(1500)]  # ~11k chars in one paragraph
+    chunks = chunk.chunk_markdown(" ".join(words), "csv.md")
+    assert len(chunks) > 1
+    assert all(len(c.text) <= chunk.MAX_PARAGRAPH + 10 for c in chunks)  # + title prefix
+
+
+def test_hard_split_pieces_keep_order_and_content():
+    words = [f"word{i}" for i in range(1500)]
+    pieces = chunk._hard_split(" ".join(words))
+    assert len(pieces) > 1
+    assert all(len(p) <= chunk.MAX_PARAGRAPH for p in pieces)
+    assert " ".join(pieces).split() == words
+
+
 # --- index and search -------------------------------------------------------
 
 
@@ -116,6 +131,7 @@ def test_save_and_load_round_trips_through_parquet_and_meta(tmp_path):
     path = rag_index.save_index(index, tmp_path / "idx.parquet")
     sidecar = tmp_path / "idx.parquet.meta.json"
     assert sidecar.exists()
+    assert not list(tmp_path.glob("*.tmp"))  # atomic writes clean up after themselves
     assert '"model": "fake:bag-of-words"' in sidecar.read_text(encoding="utf-8")
 
     loaded = rag_index.load_index(path)
@@ -132,10 +148,20 @@ def test_save_index_escapes_a_quote_in_the_path(tmp_path):
     assert [c.id for c in loaded.chunks] == [c.id for c in index.chunks]
 
 
+def test_corpus_docs_survive_a_foreign_working_directory(tmp_path, monkeypatch):
+    monkeypatch.delenv("AGENTIC_STATS_DOCS_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)  # the MCP transport spawns the server with cwd=transports/
+    docs = rag_index.corpus_docs()
+    vendored = sorted(p.name for p in Path(__file__).resolve().parents[1].glob("docs/corpus/*.md"))
+    assert docs and [d.source for d in docs] == vendored
+    assert all(d.text for d in docs)
+
+
 # --- embeddings -------------------------------------------------------------
 
 
 def test_resolve_follows_the_env_switch(monkeypatch):
+    embed._resolved.cache_clear()  # drop backends memoised by other tests
     for name in ("AGENTIC_STATS_EMBED", "AGENTIC_STATS_EMBED_API_KEY", "AGENTIC_STATS_LLM_API_KEY"):
         monkeypatch.delenv(name, raising=False)
 
@@ -148,7 +174,7 @@ def test_resolve_follows_the_env_switch(monkeypatch):
         return fn
 
     monkeypatch.setattr(embed, "local_embed", lambda: stub("local:stubbed"))
-    monkeypatch.setattr(embed, "presets_embed", lambda: stub("presets:stubbed"))
+    monkeypatch.setattr(embed, "presets_embed", lambda **_: stub("presets:stubbed"))
 
     monkeypatch.setenv("AGENTIC_STATS_EMBED", "local")
     assert embed.resolve().model == "local:stubbed"
@@ -170,6 +196,34 @@ def test_resolve_follows_the_env_switch(monkeypatch):
     with pytest.raises(ValueError, match="AGENTIC_STATS_EMBED"):
         monkeypatch.setenv("AGENTIC_STATS_EMBED", "banana")
         embed.resolve()
+
+
+def test_resolve_reuses_one_backend_per_configuration(monkeypatch):
+    embed._resolved.cache_clear()  # drop backends memoised by other tests
+    for name in (
+        "AGENTIC_STATS_EMBED",
+        "AGENTIC_STATS_EMBED_API_KEY",
+        "AGENTIC_STATS_LLM_API_KEY",
+        "AGENTIC_STATS_EMBED_BASE_URL",
+        "AGENTIC_STATS_EMBED_MODEL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    built = []
+
+    def counting_local():
+        built.append("local")
+
+        def fn(texts):
+            raise AssertionError("resolve must not embed")
+
+        fn.model = "local:counted"
+        return fn
+
+    monkeypatch.setattr(embed, "local_embed", counting_local)
+    first, second = embed.resolve(), embed.resolve()
+    assert first is second
+    assert built == ["local"]  # one build, one httpx.Client per process
 
 
 class _FakeResponse:
