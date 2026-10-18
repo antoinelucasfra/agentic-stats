@@ -95,6 +95,37 @@ def test_fetch_index_refetches_when_forced(monkeypatch, tmp_path):
     assert calls == [catalog.INDEX_URL, catalog.INDEX_URL]
 
 
+def test_fetch_index_goes_through_the_fetch_gate(monkeypatch, tmp_path):
+    """The gate resolves the host before any request, and redirects stay off."""
+    monkeypatch.setenv("AGENTIC_STATS_CACHE", str(tmp_path))
+    monkeypatch.setattr("utils.fetch._resolve", lambda host: ["93.184.216.34"])
+    seen: dict = {}
+
+    def fake_get(url: str, **kwargs):
+        seen.update(kwargs, url=url)
+        return _response(200, SAMPLE)
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    catalog.fetch_index()
+
+    assert seen["url"] == catalog.INDEX_URL
+    assert seen["follow_redirects"] is False
+
+
+def test_fetch_index_refuses_a_non_public_resolution(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENTIC_STATS_CACHE", str(tmp_path))
+    monkeypatch.setattr("utils.fetch._resolve", lambda host: ["127.0.0.1"])
+
+    def fail_get(url: str, **kwargs):
+        raise AssertionError("the request left before the gate approved the host")
+
+    monkeypatch.setattr(httpx, "get", fail_get)
+
+    with pytest.raises(Exception, match="non-public"):
+        catalog.fetch_index()
+
+
 def test_fetch_index_reports_a_failed_download(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENTIC_STATS_CACHE", str(tmp_path))
 

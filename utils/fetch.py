@@ -18,6 +18,7 @@ import hashlib
 import ipaddress
 import socket
 import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -122,8 +123,17 @@ def _is_public(address: str) -> bool:
     return ip.is_global and not any(ip in network for network in blocked)
 
 
-def assert_public_url(url: str) -> str:
-    """Return the normalized https URL, or raise FetchError."""
+def _check_public(host: str) -> list[str]:
+    """Resolve the host and return the addresses, or raise if any one is not public."""
+    addresses = _resolve(host)
+    for address in addresses:
+        if not _is_public(address):
+            raise FetchError(f"{host!r} resolves to the non-public address {address}")
+    return addresses
+
+
+def _approve(url: str) -> tuple[str, list[str]]:
+    """assert_public_url plus the verified addresses, so the connect can be pinned to them."""
     parsed = urlsplit(url)
     if parsed.scheme != "https":
         raise FetchError(f"only https URLs are fetched, not {parsed.scheme or 'no scheme'!r}")
@@ -134,10 +144,49 @@ def assert_public_url(url: str) -> str:
     host = parsed.hostname
     if not host:
         raise FetchError(f"no host in URL {url!r}")
-    for address in _resolve(host):
-        if not _is_public(address):
-            raise FetchError(f"{host!r} resolves to the non-public address {address}")
-    return urlunsplit(parsed)
+    return urlunsplit(parsed), _check_public(host)
+
+
+def assert_public_url(url: str) -> str:
+    """Return the normalized https URL, or raise FetchError."""
+    return _approve(url)[0]
+
+
+@contextmanager
+def _pin_dns(host: str, addresses: list[str]):
+    """Pin one hostname to exactly the addresses the gate approved, per request.
+
+    httpcore resolves through socket.getaddrinfo, so for the duration of one
+    request the resolver is swapped for a table that answers `host` with the
+    checked addresses and nothing else. A name that re-binds between the check
+    and the connect still reaches only what passed `_is_public`; every returned
+    address was approved. Other hosts fall through to the real resolver.
+    """
+    real = socket.getaddrinfo
+    verified = []
+    for address in addresses:
+        ip = ipaddress.ip_address(address)
+        family = socket.AF_INET6 if ip.version == 6 else socket.AF_INET
+        # Flowinfo and scopeid stay zero; the connect port is filled in per call.
+        verified.append(
+            (family, socket.SOCK_STREAM, socket.IPPROTO_TCP, () if ip.version == 4 else (0, 0))
+        )
+
+    def pinned(hostname, port, *args, **kwargs):
+        if hostname == host:
+            return [
+                (family, sock_type, proto, "", (address, port, *extra))
+                for (family, sock_type, proto, extra), address in zip(
+                    verified, addresses, strict=True
+                )
+            ]
+        return real(hostname, port, *args, **kwargs)
+
+    socket.getaddrinfo = pinned
+    try:
+        yield
+    finally:
+        socket.getaddrinfo = real
 
 
 def _detect_format(media_type: str, url: str) -> Format:
@@ -204,16 +253,19 @@ def fetch_table(
     """
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
-    target = assert_public_url(url)
+    target, verified = _approve(url)
 
     with httpx.Client(follow_redirects=False, timeout=timeout_s) as client:
         for _ in range(_MAX_REDIRECTS + 1):
-            with client.stream("GET", target) as response:
+            with (
+                _pin_dns(urlsplit(target).hostname, verified),
+                client.stream("GET", target) as response,
+            ):
                 if response.status_code in _REDIRECT_STATUS:
                     location = response.headers.get("location")
                     if not location:
                         raise FetchError(f"{target} redirected without a location")
-                    target = assert_public_url(urljoin(target, location))
+                    target, verified = _approve(urljoin(target, location))
                     continue
                 if response.status_code != httpx.codes.OK:
                     raise FetchError(f"{target} returned status {response.status_code}")

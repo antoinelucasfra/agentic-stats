@@ -8,6 +8,9 @@ cases run through `httpx.MockTransport` so no socket is ever opened.
 from __future__ import annotations
 
 import hashlib
+import socket
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 import httpx
@@ -231,3 +234,85 @@ def test_jsonl_content_type_maps_to_json(monkeypatch: pytest.MonkeyPatch, tmp_pa
     result = fetch.fetch_table("https://example.com/data.jsonl", dest_dir=tmp_path)
     assert result.format == "json"
     assert result.path.suffix == ".json"
+
+
+def test_a_private_first_resolution_raises_before_any_request(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(fetch, "_resolve", lambda host: ["10.0.0.1"])
+
+    with pytest.raises(fetch.FetchError):
+        fetch.fetch_table("https://example.com/data.csv", dest_dir=tmp_path)
+
+
+def test_pin_dns_answers_only_with_verified_addresses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A name that re-binds between the check and the connect still resolves to the check."""
+
+    def lying_getaddrinfo(hostname, port, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("127.0.0.1", port))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", lying_getaddrinfo)
+
+    with fetch._pin_dns("example.com", [PUBLIC]):
+        infos = socket.getaddrinfo("example.com", 443)
+        assert [(info[0], info[4][0], info[4][1]) for info in infos] == [
+            (socket.AF_INET, PUBLIC, 443)
+        ]
+        # a different host keeps the underlying resolver
+        assert socket.getaddrinfo("db.internal", 5432)[0][4][0] == "127.0.0.1"
+
+    assert socket.getaddrinfo("example.com", 443)[0][4][0] == "127.0.0.1"
+
+
+def test_pin_dns_with_no_verified_addresses_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: [])
+
+    with fetch._pin_dns("example.com", []):
+        assert socket.getaddrinfo("example.com", 443) == []
+
+
+def test_dns_rebinding_at_connect_time_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The gate sees a public address; the resolver re-binds to loopback for the connect."""
+    hits = 0
+
+    class Attacker(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            nonlocal hits
+            hits += 1
+            self.send_response(200)
+            self.send_header("content-type", "text/csv")
+            self.end_headers()
+            self.wfile.write(b"a,b\n1,2\n")
+
+        def log_message(self, *args) -> None:
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Attacker)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        monkeypatch.setattr(fetch, "_resolve", lambda host: [PUBLIC])
+        underlying = socket.getaddrinfo
+
+        def rebinding_getaddrinfo(hostname, port_, *args, **kwargs):
+            if hostname == "attacker.example":
+                return [
+                    (
+                        socket.AF_INET,
+                        socket.SOCK_STREAM,
+                        socket.IPPROTO_TCP,
+                        "",
+                        ("127.0.0.1", port_),
+                    )
+                ]
+            return underlying(hostname, port_, *args, **kwargs)
+
+        monkeypatch.setattr(socket, "getaddrinfo", rebinding_getaddrinfo)
+
+        with pytest.raises((fetch.FetchError, httpx.TransportError)):
+            fetch.fetch_table("https://attacker.example/data.csv", dest_dir=tmp_path, timeout_s=5.0)
+        assert hits == 0, "the connect must use the verified address, not the re-bound one"
+    finally:
+        server.shutdown()
+        server.server_close()

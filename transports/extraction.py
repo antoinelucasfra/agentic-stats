@@ -8,6 +8,7 @@ matches the table the reader gets.
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Any
 
@@ -139,11 +140,12 @@ def extract_columns(
 
 
 def _is_number(value: Any) -> bool:
+    """Coercible to a finite float: nan and inf stay text, they never reach the CSV."""
     try:
-        float(value)
+        number = float(value)
     except (TypeError, ValueError):
         return False
-    return True
+    return math.isfinite(number)
 
 
 def _default_client() -> chatlas.ChatOpenAICompletions:

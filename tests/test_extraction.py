@@ -88,6 +88,16 @@ def test_json_numbers_are_read_not_rejected():
     assert frame["grain"].tolist() == [4.2]
 
 
+def test_non_finite_text_stays_text_and_never_reaches_the_csv():
+    client = FakeClient(records({"grain": "nan", "variety": "inf"}))
+
+    frame = extraction.extract_columns("notes", ["grain", "variety"], client=client)
+
+    assert frame["grain"].tolist() == ["nan"]
+    assert frame["variety"].tolist() == ["inf"]
+    assert frame.attrs["coerced"] == []
+
+
 def test_bad_payload_shapes_raise_actionable_errors():
     with pytest.raises(ValueError, match="at least one column"):
         extraction.extract_columns("notes", ["  "], client=FakeClient(records()))

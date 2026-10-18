@@ -181,7 +181,7 @@ Three panels, one page, plus the data that feeds them:
   which call closes it. Uploads are read from the temp file Shiny writes, capped at
   5 MB, and never written to disk; CSV and parquet both work. A download button
   exports the session, tables, ledger and findings, as one self-contained HTML file.
-- **Agent** is a chat over the twelve ledger-aware tools: `chatlas` with
+- **Agent** is a chat over the sixteen ledger-aware tools: `chatlas` with
   `ChatOpenAICompletions`, so Ollama, vLLM, LM Studio, Groq, OpenAI, Anthropic,
   Gemini, Mistral and OpenRouter all work through one client. A preset select fills
   model and endpoint; the four newest providers ship no model name, because those
