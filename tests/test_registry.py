@@ -85,3 +85,11 @@ def test_args_schema_matches_what_mcp_publishes():
 def test_get_lists_valid_names_on_a_typo():
     with pytest.raises(KeyError, match="describe_dataset"):
         registry.get("describe_datasets")
+
+
+def test_the_docs_tools_sit_in_their_own_group_and_reach_the_agent():
+    for name in ("search_docs", "ask_docs", "index_documents"):
+        tool = registry.get(name)
+        assert tool.group == "6. Ask the docs"
+        assert tool in registry.agent_tools()
+        assert tool.description.strip()

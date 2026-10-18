@@ -17,6 +17,7 @@ from typing import Any, get_type_hints
 
 from pydantic import BaseModel, create_model
 
+from rag import tools as rag_tools
 from stats import estimates, reading, stats_tools, workflow
 
 _EMPTY = inspect.Parameter.empty
@@ -75,6 +76,7 @@ ESTIMATE = "2. Estimate"
 READING = "3. Read the result"
 DESIGN = "4. Design size"
 DOMAIN = "5. Domain pack"
+DOCS = "6. Ask the docs"
 
 TOOLS: list[ToolSpec] = [
     spec(workflow.frame_question, WORKFLOW),
@@ -97,6 +99,9 @@ TOOLS: list[ToolSpec] = [
     spec(stats_tools.dose_response, DOMAIN),
     spec(stats_tools.fit_curve_family, DOMAIN, agent=False),
     spec(stats_tools.correlate, DOMAIN, agent=False),
+    spec(rag_tools.search_docs, DOCS),
+    spec(rag_tools.ask_docs, DOCS),
+    spec(rag_tools.index_documents, DOCS),
 ]
 
 

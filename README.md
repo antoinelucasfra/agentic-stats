@@ -24,7 +24,7 @@ enforces that before the answer is shown.
 - **One registry, three transports.** `stats/registry.py` derives each tool's
   JSON Schema from the function's signature and docstring. The MCP server, the
   CLI agent and the Shiny app all read that one list, so they cannot drift apart.
-  20 tools are registered; the chat agent is offered 13, because the domain pack
+  23 tools are registered; the chat agent is offered 16, because the domain pack
   and the ledger-aware surface should not compete for a small model's attention.
 - **A ledger, not a prompt.** Six stages, in order, each written by the tool that
   establishes it. A fit cannot be interpreted before its assumptions were
@@ -56,7 +56,7 @@ only. An inferential one needs the whole chain, including sensitivity.
 
 ## What the tools answer
 
-Twelve tools on the agent surface, in ledger order: `frame_question`,
+Sixteen tools on the agent surface, in ledger order: `frame_question`,
 `profile_table`, `run_sql`, `load_table`, `analysis_status`, `fit_model`,
 `compare_groups`, `marginal_effects`, `sensitivity`, `plot`, `explain_result`,
 plus `power_analysis` and `dose_response`. Arguments, guarantees and refusal
@@ -66,6 +66,10 @@ Seven more tools, the domain pack (`describe_dataset`, `fit_mixed_model`,
 `anova_effect`, `marginal_means`, `check_assumptions`, `fit_curve_family`,
 `correlate`), stay callable over MCP and in the Playground but are not offered to
 the chat agent.
+
+Three docs tools, the "Ask the docs" group (`search_docs`, `ask_docs`,
+`index_documents`), are offered to the chat agent too. They are non-inferential:
+they write no ledger stage and require none.
 
 Tool errors are written for a model to recover from:
 
