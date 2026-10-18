@@ -100,6 +100,13 @@ def test_bad_payload_shapes_raise_actionable_errors():
         extraction.extract_columns("notes", ["grain"], client=FakeClient([1, 2]))
 
 
+def test_a_non_dict_record_raises_naming_the_column():
+    client = FakeClient(records("a", "b"))
+
+    with pytest.raises(ValueError, match="'records'"):
+        extraction.extract_columns("notes", ["grain"], client=client)
+
+
 def test_default_client_uses_env_settings_without_tools(monkeypatch):
     monkeypatch.setenv("AGENTIC_STATS_LLM_MODEL", "smol")
     monkeypatch.setenv("AGENTIC_STATS_LLM_BASE_URL", "http://127.0.0.1:11434/v1")

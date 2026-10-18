@@ -115,7 +115,9 @@ class GuardedClient:
             # The slot is held until the stream is consumed, not merely
             # started: shinychat iterates the generator after this returns.
             try:
-                with use_session(store()):
+                # One scope for the whole stream: the ledger session for the
+                # tools, and this session's document map for the rag tools.
+                with use_session(store()), rag.use_docs(self._state["docs"]):
                     response = await inner.stream_async(user_input, *contents, **kwargs)
                     async for chunk in response:
                         yield chunk
@@ -138,13 +140,13 @@ def _decode(att: Any) -> str:
     return base64.b64decode(payload).decode("utf-8", errors="replace")
 
 
-async def _index_attachments(attachments: list[Any], indexed: dict[str, str]) -> list[str]:
+async def _index_attachments(attachments: list[Any], docs: rag.SessionDocs) -> list[str]:
     """Index text-like attachments into the session's rag index; return chat notes.
 
-    `indexed` maps name to decoded text across the session, so a re-uploaded
-    file is not indexed twice. `index_documents` replaces the session index,
-    so the call carries the full accumulated set; only the new names are
-    announced. Never raises: a failed index must not block the model turn.
+    `docs` is the session's shared document map, so attachments merge with what
+    the model indexed through the index_documents tool. Only new names are
+    indexed, so a re-uploaded file is not indexed twice. Never raises: a failed
+    index must not block the model turn.
     """
     notes: list[str] = []
     try:
@@ -153,12 +155,12 @@ async def _index_attachments(attachments: list[Any], indexed: dict[str, str]) ->
             notes.append(
                 f"Skipped {', '.join(skipped)} \u2014 only text and CSV files are indexed."
             )
-        new = [(a.name, _decode(a)) for a in attachments if _text_like(a) and a.name not in indexed]
+        new = [
+            (a.name, _decode(a)) for a in attachments if _text_like(a) and a.name not in docs.docs
+        ]
         if new:
-            names = [*indexed, *(name for name, _ in new)]
-            texts = [*indexed.values(), *(text for _, text in new)]
-            rag.index_documents(texts, names)
-            indexed.update(new)
+            with rag.use_docs(docs):
+                rag.index_documents([text for _, text in new], [name for name, _ in new])
             notes.append(
                 f"Indexed {len(new)} document(s): {', '.join(name for name, _ in new)}"
                 " \u2014 ask_docs now reads them."
@@ -183,7 +185,7 @@ def agent_server(input: Inputs, output: Outputs, session: Session, store: reacti
         "client": None,
         "trace": [],
         "turns": 0,
-        "indexed": {},
+        "docs": rag.SessionDocs(),
     }
 
     def build(preset_id: str, model: str, base_url: str, api_key: str) -> GuardedClient:
@@ -240,7 +242,7 @@ def agent_server(input: Inputs, output: Outputs, session: Session, store: reacti
     @chat.on_user_submit
     async def _on_submit(user_input: str, attachments: list[Any]) -> None:
         """Index attachments alongside shinychat's stream; notes land in the chat."""
-        for note in await _index_attachments(attachments, state["indexed"]):
+        for note in await _index_attachments(attachments, state["docs"]):
             await chat.append_message(note)
 
     @reactive.effect

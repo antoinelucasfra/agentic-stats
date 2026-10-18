@@ -98,7 +98,12 @@ def search(index: DocIndex, query: str, embed: EmbedFn, k: int = 5) -> list[Hit]
 
 
 def save_index(index: DocIndex, path: Path | str) -> Path:
-    """Write the parquet and its .meta.json sidecar, atomically enough for a cache."""
+    """Write the parquet and its .meta.json sidecar, atomically enough for a cache.
+
+    The parquet lands on a .tmp sibling first and `os.replace` moves it into
+    place, so two writers can never leave a half-written cache behind. The COPY
+    string is built, not bound, so a quote in the path is escaped doubled.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     frame = pd.DataFrame(
@@ -110,10 +115,13 @@ def save_index(index: DocIndex, path: Path | str) -> Path:
             "vector": [v.tolist() for v in index.vectors],
         }
     )
+    staging = path.with_suffix(".tmp")
     connection = duckdb.connect()
     connection.register("chunks_df", frame)
-    connection.execute(f"COPY chunks_df TO '{path.as_posix()}' (FORMAT parquet)")
+    target = staging.as_posix().replace("'", "''")
+    connection.execute(f"COPY chunks_df TO '{target}' (FORMAT parquet)")
     connection.close()
+    os.replace(staging, path)
     meta = {
         "model": index.model,
         "dim": int(index.vectors.shape[1]) if index.vectors.size else 0,

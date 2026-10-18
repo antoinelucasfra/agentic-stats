@@ -80,7 +80,12 @@ def _rows(
         validated = model.model_validate(
             {
                 WRAPPER_FIELD: [
+                    # A provider may return a bare value instead of a record;
+                    # pass it through unchanged so its failure lands in the
+                    # same actionable error as any unreadable cell.
                     {name: _as_text(row.get(name)) for name in names}
+                    if isinstance(row, dict)
+                    else row
                     for row in payload[WRAPPER_FIELD]
                 ]
             }

@@ -5,16 +5,21 @@ ledger stage and requires none, so the workflow tools' `require` calls are the
 only gate and these handlers never touch one.
 
 `ask_docs` composes its answer from the retrieved chunks alone. Sentences are
-quoted from the top hits and each carries its citation (`file.md#n`); when
-retrieval finds nothing above `MIN_RELEVANCE`, the result says so in
-`cannot_say` instead of inventing an answer. A session-local index built by
-`index_documents` is searched alongside the book corpus, and never cached to
-disk.
+quoted from the top hits and each carries its citation (`file.md#n` for corpus
+chunks, `user:<name>#n` for session documents); when retrieval finds nothing
+above `MIN_RELEVANCE`, the result says so in `cannot_say` instead of inventing
+an answer. A session-local index built by `index_documents` is searched
+alongside the book corpus, and never cached to disk.
 """
 
 from __future__ import annotations
 
 import re
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 from pydantic import BaseModel, Field
@@ -31,16 +36,46 @@ MAX_ANSWER_HITS = 3
 
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
 
-# Session state: the lazily built book index and the index_documents index.
+
+@dataclass
+class SessionDocs:
+    """The documents one session indexed, and the index built over them."""
+
+    docs: dict[str, str] = field(default_factory=dict)
+    index: DocIndex | None = None
+
+
+# Session state: the lazily built book index, and one document map per session
+# holding whatever index_documents and the attachment path indexed. The map is
+# scoped with `use_docs` where a Shiny session is running; MCP and the CLI have
+# no session, so they share the module-level fallback.
 _book: DocIndex | None = None
-_user: DocIndex | None = None
+_book_lock = threading.Lock()
+_fallback = SessionDocs()
+_docs_ctx: ContextVar[SessionDocs | None] = ContextVar("rag_session_docs", default=None)
+
+
+@contextmanager
+def use_docs(docs: SessionDocs) -> Iterator[SessionDocs]:
+    """Make `docs` the session document map, the way use_session scopes a store."""
+    token = _docs_ctx.set(docs)
+    try:
+        yield docs
+    finally:
+        _docs_ctx.reset(token)
 
 
 def reset_session() -> None:
-    """Drop both cached indexes. New session, or new embeddings, in tests."""
-    global _book, _user
+    """Drop the book cache and the fallback documents. New session or new tests."""
+    global _book, _fallback
     _book = None
-    _user = None
+    _fallback = SessionDocs()
+
+
+def _session_docs() -> SessionDocs:
+    """The document map in scope, or the process-wide one without a session."""
+    active = _docs_ctx.get()
+    return active if active is not None else _fallback
 
 
 def _embed():
@@ -51,22 +86,55 @@ def _embed():
 def _book_index() -> DocIndex | None:
     """The corpus index, built once per process and cached as parquet."""
     global _book
-    if _book is None:
-        path = rag_index.corpus_index_path()
-        if path.exists():
-            _book = rag_index.load_index(path)
-        else:
-            docs = rag_index.corpus_docs()
-            if not docs:
-                return None
-            _book = rag_index.build_index(docs, _embed())
-            rag_index.save_index(_book, path)
+    if _book is not None:
+        return _book
+    # Two sessions reaching their first question together must not interleave
+    # the build and write the same parquet twice.
+    with _book_lock:
+        if _book is None:
+            _book = _load_or_build_book()
     return _book
+
+
+def _load_or_build_book() -> DocIndex | None:
+    path = rag_index.corpus_index_path()
+    model = str(getattr(_embed(), "model", "unknown"))
+    if path.exists():
+        cached = rag_index.load_index(path)
+        # A cache built by another embedder would break search with a dimension
+        # mismatch, so the sidecar's model must match before the cache is used.
+        if cached.model == model:
+            return cached
+    docs = rag_index.corpus_docs()
+    if not docs:
+        return None
+    built = rag_index.build_index(docs, _embed())
+    rag_index.save_index(built, path)
+    return built
+
+
+def _build_user_index(docs: dict[str, str]) -> DocIndex:
+    built = rag_index.build_index(
+        [rag_index.Document(source=name, text=text) for name, text in docs.items()],
+        _embed(),
+    )
+    # Session chunks are cited as user:<name>#n so a document named like a
+    # corpus file cannot produce an ambiguous citation.
+    built.chunks = [replace(chunk, id=f"user:{chunk.id}") for chunk in built.chunks]
+    return built
+
+
+def _user_index() -> DocIndex | None:
+    """The session's index over its own documents, built on first use."""
+    state = _session_docs()
+    if state.index is None and state.docs:
+        state.index = _build_user_index(state.docs)
+    return state.index
 
 
 def _combined() -> DocIndex | None:
     """Book corpus plus whatever the session indexed, vectors stacked."""
-    indexes = [one for one in (_book_index(), _user) if one is not None and one.chunks]
+    indexes = [one for one in (_book_index(), _user_index()) if one is not None and one.chunks]
     if not indexes:
         return None
     if len(indexes) == 1:
@@ -198,10 +266,11 @@ def ask_docs(question: str) -> AskDocsResult:
 def index_documents(documents: list[str], names: list[str] | None = None) -> IndexDocumentsResult:
     """Index pasted text documents for this session; search_docs and ask_docs see them.
 
-    Text only: the caller reads files and passes their contents. The index lives
-    in memory for the session and is never written to disk.
+    Text only: the caller reads files and passes their contents. Documents merge
+    into the session's map, so indexing again keeps what earlier calls and the
+    attachment path already indexed. The index lives in memory for the session
+    and is never written to disk.
     """
-    global _user
     if not documents:
         raise ToolError(
             "index_documents needs at least one document: pass its text in `documents`."
@@ -211,17 +280,19 @@ def index_documents(documents: list[str], names: list[str] | None = None) -> Ind
         raise ToolError(
             f"Got {len(documents)} documents and {len(names)} names; pass one name per document."
         )
-    docs = [
-        rag_index.Document(source=name, text=text)
-        for name, text in zip(names, documents, strict=True)
-    ]
-    _user = rag_index.build_index(docs, _embed())
+    state = _session_docs()
+    merged = {**state.docs, **dict(zip(names, documents, strict=True))}
+    built = _build_user_index(merged)
+    # Commit only after the build succeeded, so a failed embed leaves the map
+    # untouched and a retry can pick the documents back up.
+    state.docs = merged
+    state.index = built
     return IndexDocumentsResult(
         names=names,
-        n_documents=len(docs),
-        n_chunks=len(_user.chunks),
-        dim=int(_user.vectors.shape[1]) if _user.vectors.size else 0,
-        model=_user.model,
+        n_documents=len(merged),
+        n_chunks=len(built.chunks),
+        dim=int(built.vectors.shape[1]) if built.vectors.size else 0,
+        model=built.model,
     )
 
 

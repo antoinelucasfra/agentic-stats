@@ -125,6 +125,13 @@ def test_save_and_load_round_trips_through_parquet_and_meta(tmp_path):
     assert [h.id for h in original] == [h.id for h in reloaded]
 
 
+def test_save_index_escapes_a_quote_in_the_path(tmp_path):
+    index = rag_index.build_index(_marker_docs(), fake_embed)
+    saved = rag_index.save_index(index, tmp_path / "bo'ok.parquet")
+    loaded = rag_index.load_index(saved)
+    assert [c.id for c in loaded.chunks] == [c.id for c in index.chunks]
+
+
 # --- embeddings -------------------------------------------------------------
 
 
@@ -287,3 +294,84 @@ def test_search_docs_names_the_remedy_when_nothing_is_indexed(tmp_path, monkeypa
             _spec_call("search_docs", query="anything")
     finally:
         rag_tools.reset_session()
+
+
+def test_tool_and_attachment_documents_merge(tmp_path, monkeypatch):
+    """One session map: an attachment upload keeps tool-indexed docs and vice versa."""
+    monkeypatch.setenv("AGENTIC_STATS_DOCS_DIR", str(tmp_path / "absent"))  # no book corpus
+    monkeypatch.setattr(rag_tools, "_embed", lambda: fake_embed)
+    rag_tools.reset_session()
+    docs = rag_tools.SessionDocs()
+    try:
+        with rag_tools.use_docs(docs):
+            _spec_call(
+                "index_documents",
+                documents=["Magnesium travels in the xylem stream."],
+                names=["tool.md"],
+            )
+            # The attachment path indexes through the same merge, like _index_attachments.
+            rag_tools.index_documents(["Zinc deficiency yellows the leaves."], ["upload.md"])
+            found = _spec_call("search_docs", query="magnesium zinc", k=5)
+            sources = {h.source for h in found.hits}
+            assert {"tool.md", "upload.md"} <= sources
+            assert all(h.chunk_id.startswith("user:") for h in found.hits)
+            assert "user:upload.md#0" in {h.chunk_id for h in found.hits}
+
+            # A later tool call re-indexes; the attachment document survives.
+            _spec_call(
+                "index_documents",
+                documents=["More magnesium notes on translocation."],
+                names=["tool-2.md"],
+            )
+            found = _spec_call("search_docs", query="zinc leaves", k=5)
+            assert "upload.md" in {h.source for h in found.hits}
+    finally:
+        rag_tools.reset_session()
+
+
+def test_two_sessions_do_not_share_indexed_documents(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTIC_STATS_DOCS_DIR", str(tmp_path / "absent"))  # no book corpus
+    monkeypatch.setattr(rag_tools, "_embed", lambda: fake_embed)
+    rag_tools.reset_session()
+    first, second = rag_tools.SessionDocs(), rag_tools.SessionDocs()
+    try:
+        with rag_tools.use_docs(first):
+            _spec_call(
+                "index_documents",
+                documents=["Magnesium travels in the xylem stream."],
+                names=["first.md"],
+            )
+        with rag_tools.use_docs(second):
+            _spec_call(
+                "index_documents",
+                documents=["Zinc deficiency yellows the leaves."],
+                names=["second.md"],
+            )
+            found = _spec_call("search_docs", query="magnesium", k=5)
+            assert {h.source for h in found.hits} == {"second.md"}
+        with rag_tools.use_docs(first):
+            found = _spec_call("search_docs", query="magnesium", k=1)
+            assert found.hits[0].source == "first.md"
+    finally:
+        rag_tools.reset_session()
+
+
+def test_a_cached_book_from_another_embedder_is_rebuilt(book, monkeypatch):
+    _spec_call("search_docs", query="How are nitrogen rates applied?", k=1)  # builds the cache
+    meta = book.with_name(book.name + ".meta.json")
+    assert '"model": "fake:bag-of-words"' in meta.read_text(encoding="utf-8")
+
+    def other_embed(texts: list[str]) -> np.ndarray:
+        out = np.zeros((len(texts), 8), dtype=np.float32)
+        for i, text in enumerate(texts):
+            for word in re.findall(r"\w+", text.lower()):
+                out[i, zlib.crc32(word.encode()) % 8] += 1
+        norms = np.linalg.norm(out, axis=1, keepdims=True)
+        return out / np.where(norms == 0, 1.0, norms)
+
+    other_embed.model = "fake:other"  # a different dimension: the cache cannot be reused
+    monkeypatch.setattr(rag_tools, "_embed", lambda: other_embed)
+    rag_tools.reset_session()
+    result = _spec_call("search_docs", query="How are nitrogen rates applied?", k=1)
+    assert result.n_hits == 1  # rebuilt instead of a dimension-mismatch matmul
+    assert '"model": "fake:other"' in meta.read_text(encoding="utf-8")

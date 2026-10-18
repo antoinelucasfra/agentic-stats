@@ -59,7 +59,9 @@ class _FakeClient:
 
 def _guarded(inner: _FakeClient, turns: int = 0) -> agent_server.GuardedClient:
     return agent_server.GuardedClient(
-        inner, {"turns": turns, "key": None, "trace": []}, SessionStore
+        inner,
+        {"turns": turns, "key": None, "trace": [], "docs": agent_server.rag.SessionDocs()},
+        SessionStore,
     )
 
 
@@ -103,7 +105,7 @@ def test_guard_refuses_on_budget_overrun_and_frees_the_slot():
 def test_guard_forwards_the_stream_and_releases_the_slot():
     async def main() -> None:
         inner = _FakeClient()
-        state = {"turns": 0, "key": None, "trace": []}
+        state = {"turns": 0, "key": None, "trace": [], "docs": agent_server.rag.SessionDocs()}
         guarded = agent_server.GuardedClient(inner, state, SessionStore)
         response = await guarded.stream_async("hello", content="all")
         assert await _drain(response) == ["a", "b"]
@@ -118,7 +120,12 @@ def test_guard_forwards_the_stream_and_releases_the_slot():
 
 def test_the_budget_counter_survives_a_client_rebuild():
     async def main() -> None:
-        state: dict[str, Any] = {"turns": 0, "key": None, "trace": []}
+        state: dict[str, Any] = {
+            "turns": 0,
+            "key": None,
+            "trace": [],
+            "docs": agent_server.rag.SessionDocs(),
+        }
         first = agent_server.GuardedClient(_FakeClient(), state, SessionStore)
         second = agent_server.GuardedClient(_FakeClient(), state, SessionStore)
         first._state["turns"] = agent_server.TURNS_PER_SESSION
@@ -168,15 +175,16 @@ def test_attachments_are_decoded_and_indexed_once(monkeypatch: pytest.MonkeyPatc
 
         def fake(documents: list[str], names: list[str] | None = None) -> Any:
             calls.append((list(documents), list(names)))
+            docs.docs.update(zip(names, documents, strict=True))  # what the real commit does
 
         monkeypatch.setattr(agent_server.rag, "index_documents", fake)
-        indexed: dict[str, str] = {}
+        docs = agent_server.rag.SessionDocs()
         notes = await agent_server._index_attachments(
-            [_Att("a.md", "text/markdown", "# hi"), _Att("b.csv", "text/csv", "x,y")], indexed
+            [_Att("a.md", "text/markdown", "# hi"), _Att("b.csv", "text/csv", "x,y")], docs
         )
         assert calls == [(["# hi", "x,y"], ["a.md", "b.csv"])]
         assert notes == [_INDEXED_NOTE]
-        assert indexed == {"a.md": "# hi", "b.csv": "x,y"}
+        assert docs.docs == {"a.md": "# hi", "b.csv": "x,y"}
 
     asyncio.run(main())
 
@@ -187,18 +195,17 @@ def test_a_duplicate_attachment_is_not_indexed_again(monkeypatch: pytest.MonkeyP
 
         def fake(documents: list[str], names: list[str] | None = None) -> Any:
             calls.append((list(documents), list(names)))
+            docs.docs.update(zip(names, documents, strict=True))
 
         monkeypatch.setattr(agent_server.rag, "index_documents", fake)
-        indexed: dict[str, str] = {"a.md": "# hi", "b.csv": "x,y"}
-        notes = await agent_server._index_attachments(
-            [_Att("a.md", "text/markdown", "# hi")], indexed
-        )
+        docs = agent_server.rag.SessionDocs(docs={"a.md": "# hi", "b.csv": "x,y"})
+        notes = await agent_server._index_attachments([_Att("a.md", "text/markdown", "# hi")], docs)
         assert calls == []
         assert notes == []
-        # A new upload carries the accumulated set: index_documents replaces,
-        # so dropping old documents would lose them from the session index.
-        await agent_server._index_attachments([_Att("c.txt", "text/plain", "third")], indexed)
-        assert calls[-1] == (["# hi", "x,y", "third"], ["a.md", "b.csv", "c.txt"])
+        # A new upload indexes only the new names: index_documents merges into
+        # the session map, so the earlier documents stay searchable.
+        await agent_server._index_attachments([_Att("c.txt", "text/plain", "third")], docs)
+        assert calls[-1] == (["third"], ["c.txt"])
 
     asyncio.run(main())
 
@@ -213,7 +220,7 @@ def test_pdfs_and_images_are_skipped_with_a_note(monkeypatch: pytest.MonkeyPatch
         monkeypatch.setattr(agent_server.rag, "index_documents", fake)
         notes = await agent_server._index_attachments(
             [_Att("paper.pdf", "application/pdf", "%PDF-"), _Att("pic.png", "image/png", "x")],
-            {},
+            agent_server.rag.SessionDocs(),
         )
         assert calls == []
         assert notes == ["Skipped paper.pdf, pic.png \u2014 only text and CSV files are indexed."]
@@ -229,13 +236,11 @@ def test_an_indexing_failure_appends_a_note_and_does_not_raise(
             raise RuntimeError("no embeddings")
 
         monkeypatch.setattr(agent_server.rag, "index_documents", broken)
-        indexed: dict[str, str] = {}
-        notes = await agent_server._index_attachments(
-            [_Att("a.md", "text/markdown", "hi")], indexed
-        )
+        docs = agent_server.rag.SessionDocs()
+        notes = await agent_server._index_attachments([_Att("a.md", "text/markdown", "hi")], docs)
         assert notes == [_FAIL_NOTE]
         # The failed upload stays unindexed, so a retry can pick it up.
-        assert indexed == {}
+        assert docs.docs == {}
 
     asyncio.run(main())
 
